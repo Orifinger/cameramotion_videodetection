@@ -55,6 +55,11 @@ MAX_OUTPUT_TOKENS = 1400
 TEMPERATURE = 0.0
 ENABLE_JSON_SCHEMA = True
 
+# The Qwen prompt and parser both enforce these caps. Keep the initial SAM
+# proposal set small and high-value rather than treating it as an object inventory.
+MAX_SAM3_CANDIDATES = 6
+MAX_DEFERRED_CANDIDATES = 6
+
 # Resumption policy. Existing success/no_sam3_candidate records are skipped
 # when False. Failed records are retried unless RETRY_FAILURE_RECORDS is False.
 OVERWRITE_EXISTING = False
