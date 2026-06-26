@@ -1,12 +1,12 @@
-"""Run the first real SAM3 text-guided video-tracking smoke test.
+#!/usr/bin/env python3
+"""Build a SAM3 multi-instance track bank from Qwen v4 concept candidates.
 
-Run from the project root, binding one physical GPU before Python imports torch:
+Run from the project root after Qwen v4 has produced its candidate view:
     CUDA_VISIBLE_DEVICES=<physical_gpu_id> python scripts/run_sam3_tracking.py
 
-This version deliberately has one visible GPU and one resident SAM3 predictor.
-It verifies the real SAM3 request/response contract and produces compact track
-metadata only. Dense mask storage and multi-worker scheduling are the next
-stage after this smoke result is visually checked.
+One SAM3 predictor stays resident. For every video and every Qwen candidate,
+SAM3 may return multiple matching object identities; all of them are retained.
+This stage does not choose a final focus region or an editing instruction.
 """
 
 from __future__ import annotations
@@ -24,114 +24,118 @@ from typing import Any
 import numpy as np
 import torch
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from configs.sam3_tracking_config import (
+    QWEN_INPUT_SCHEMA_VERSION,
     QWEN_SAM3_CANDIDATES_PATH,
     SAM3_CHECKPOINT_PATH,
     SAM3_CLEAR_CACHE_THRESHOLD,
     SAM3_CLOSE_SESSION_RUN_GC,
-    SAM3_FOCUS_REGIONS_PATH,
     SAM3_FAILURES_PATH,
     SAM3_MAX_CANDIDATES_PER_VIDEO,
+    SAM3_MAX_MEDIAN_AREA_RATIO,
     SAM3_MAX_VIDEOS,
+    SAM3_MIN_LONGEST_VISIBLE_RUN,
+    SAM3_MIN_MEDIAN_AREA_RATIO,
+    SAM3_MIN_VISIBLE_FRAME_RATIO,
+    SAM3_MAX_BORDER_TOUCH_RATIO,
     SAM3_OUTPUT_PROB_THRESH,
+    SAM3_PROGRESS_EVERY,
     SAM3_PROMPT_FRAME_INDEX,
     SAM3_PROPAGATION_DIRECTION,
+    SAM3_QUALITY_TRACKS_PATH,
     SAM3_RESULT_ROOT,
     SAM3_RUN_SUMMARY_PATH,
+    SAM3_SAVE_EVERY,
+    SAM3_SAVE_MASK_TUBES,
     SAM3_SCHEMA_VERSION,
     SAM3_SOURCE_ROOT,
+    SAM3_TRACK_MASK_ROOT,
     SAM3_TRACKS_ALL_PATH,
 )
 
-# Import the official source without editing it. This must happen before SAM3
-# imports so the local cloned source is used, not a possibly unrelated package.
-sys.path.insert(0, str(SAM3_SOURCE_ROOT))
+if str(SAM3_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SAM3_SOURCE_ROOT))
 from sam3.model_builder import build_sam3_video_predictor
+
+
+REQUIRED_CANDIDATE_FIELDS = {
+    "candidate_id",
+    "region_family",
+    "candidate_class",
+    "target_scope",
+    "canonical_concept",
+    "display_phrase",
+    "sam_prompt",
+    "instance_count_hint",
+    "visual_disambiguators",
+    "screen_region",
+    "temporal_presence",
+}
+ALLOWED_FAMILIES = {"physical_instance", "editable_surface"}
+ALLOWED_SCOPES = {"whole_instance", "whole_surface"}
+ALLOWED_CLASSES = {
+    "human",
+    "animal",
+    "vehicle",
+    "handheld_object",
+    "bounded_object",
+    "display_screen",
+    "sign_or_poster",
+    "paper_book_map",
+    "framed_art",
+    "apparel_panel",
+    "vehicle_panel",
+    "package_front",
+}
+ALLOWED_INSTANCE_HINTS = {"unique_in_video", "possibly_multiple", "unknown"}
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def atomic_write_json(path: Path, obj: Any) -> None:
+def atomic_write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(temp_path, "w", encoding="utf-8") as handle:
-        json.dump(obj, handle, ensure_ascii=False, indent=2)
+    temp_path = path.with_name(path.name + ".tmp")
+    temp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     temp_path.replace(path)
 
 
 def load_json(path: Path) -> Any:
     if not path.is_file():
         raise FileNotFoundError(
-            f"Qwen SAM3 candidate file is missing: {path}. "
+            f"Qwen v4 SAM3 candidate file is missing: {path}. "
             "Run scripts/run_qwen_object_proposals.py first."
         )
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def extract_video_records(dataset: Any) -> list[dict[str, Any]]:
-    """Read the unified Qwen view, whose top-level schema is { ..., videos: [...] }."""
-    if isinstance(dataset, list):
-        # Temporary compatibility for an early hand-written / legacy export.
-        videos = dataset
-    elif isinstance(dataset, dict):
-        videos = dataset.get("videos")
-    else:
-        videos = None
-
-    if not isinstance(videos, list):
-        keys = sorted(dataset.keys()) if isinstance(dataset, dict) else None
-        raise ValueError(
-            "Invalid qwen_sam3_candidates.json shape. Expected a top-level "
-            f"'videos' list, got type={type(dataset).__name__}, keys={keys}."
-        )
-
-    valid: list[dict[str, Any]] = []
-    for index, record in enumerate(videos):
-        if not isinstance(record, dict):
-            print(f"[input] skip non-dict video record at index={index}")
-            continue
-        if not record.get("video_id") or not record.get("video_path"):
-            print(f"[input] skip incomplete record index={index}: {record!r}")
-            continue
-        valid.append(record)
-    return valid
+def as_numpy(value: Any) -> np.ndarray:
+    """Safely normalize SAM3 CPU/GPU tensor-like outputs to NumPy."""
+    if value is None:
+        return np.asarray([])
+    if isinstance(value, torch.Tensor):
+        return value.detach().to("cpu").numpy()
+    return np.asarray(value)
 
 
-def normalize_candidate(raw: Any, index: int) -> tuple[dict[str, Any] | None, str | None]:
-    """Return a structured candidate and an optional compatibility warning.
-
-    v3 candidates are dictionaries. A legacy bare string is accepted only for
-    smoke-test continuity; it should be replaced by rerunning Qwen v3 before a
-    dataset-scale run.
-    """
-    if isinstance(raw, str):
-        phrase = raw.strip()
-        if not phrase:
-            return None, "empty legacy string candidate"
-        return {
-            "candidate_id": f"legacy_{index:02d}",
-            "sam_prompt": phrase,
-            "display_phrase": phrase,
-            "region_family": "legacy_unknown",
-            "editable_priority": None,
-            "legacy_candidate": True,
-        }, "legacy bare-string candidate; rerun Qwen v3 before full processing"
-
-    if not isinstance(raw, dict):
-        return None, f"candidate has unsupported type={type(raw).__name__}"
-
-    prompt = raw.get("sam_prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
-        return None, "missing non-empty sam_prompt"
-
-    candidate = dict(raw)
-    candidate["candidate_id"] = str(candidate.get("candidate_id") or f"candidate_{index:02d}")
-    candidate["sam_prompt"] = prompt.strip()
-    candidate["display_phrase"] = str(candidate.get("display_phrase") or candidate["sam_prompt"])
-    return candidate, None
+def safe_float(value: Any) -> float | None:
+    if isinstance(value, torch.Tensor):
+        value = value.detach().to("cpu")
+    try:
+        array = np.asarray(value)
+        if array.size != 1:
+            return None
+        result = float(array.reshape(-1)[0])
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
 
 
 def longest_consecutive_run(frame_indices: list[int]) -> int:
@@ -148,12 +152,15 @@ def longest_consecutive_run(frame_indices: list[int]) -> int:
     return longest
 
 
-def safe_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+def border_touched(mask: np.ndarray) -> bool:
+    if mask.ndim != 2 or not mask.any():
+        return False
+    return bool(
+        mask[0, :].any()
+        or mask[-1, :].any()
+        or mask[:, 0].any()
+        or mask[:, -1].any()
+    )
 
 
 def gpu_memory_snapshot() -> dict[str, int] | None:
@@ -169,17 +176,89 @@ def gpu_memory_snapshot() -> dict[str, int] | None:
     }
 
 
+def validate_candidate(raw: Any, index: int) -> tuple[dict[str, Any] | None, str | None]:
+    """Strictly accept only the structured Qwen v4 candidate contract."""
+    if not isinstance(raw, dict):
+        return None, f"candidate[{index}] must be an object, got {type(raw).__name__}"
+    missing = sorted(REQUIRED_CANDIDATE_FIELDS - set(raw))
+    if missing:
+        return None, f"candidate[{index}] missing required fields: {missing}"
+
+    candidate = dict(raw)
+    family = candidate.get("region_family")
+    candidate_class = candidate.get("candidate_class")
+    scope = candidate.get("target_scope")
+    prompt = candidate.get("sam_prompt")
+    if family not in ALLOWED_FAMILIES:
+        return None, f"candidate[{index}] invalid region_family={family!r}"
+    if candidate_class not in ALLOWED_CLASSES:
+        return None, f"candidate[{index}] invalid candidate_class={candidate_class!r}"
+    if scope not in ALLOWED_SCOPES:
+        return None, f"candidate[{index}] invalid target_scope={scope!r}"
+    expected_scope = "whole_instance" if family == "physical_instance" else "whole_surface"
+    if scope != expected_scope:
+        return None, (
+            f"candidate[{index}] family/scope mismatch: {family!r} requires "
+            f"{expected_scope!r}, got {scope!r}"
+        )
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None, f"candidate[{index}] missing non-empty sam_prompt"
+    if candidate.get("instance_count_hint") not in ALLOWED_INSTANCE_HINTS:
+        return None, f"candidate[{index}] invalid instance_count_hint"
+    if not isinstance(candidate.get("visual_disambiguators"), list):
+        return None, f"candidate[{index}] visual_disambiguators must be a list"
+
+    candidate["candidate_id"] = str(candidate["candidate_id"])
+    candidate["sam_prompt"] = prompt.strip()
+    candidate["display_phrase"] = str(candidate["display_phrase"]).strip()
+    candidate["canonical_concept"] = str(candidate["canonical_concept"]).strip()
+    return candidate, None
+
+
+def extract_video_records(dataset: Any) -> list[dict[str, Any]]:
+    """Validate the exact v4 unified Qwen candidate view."""
+    if not isinstance(dataset, dict):
+        raise ValueError(
+            "Invalid Qwen input: top-level value must be a dict with schema_version and videos."
+        )
+    schema_version = dataset.get("schema_version")
+    if schema_version != QWEN_INPUT_SCHEMA_VERSION:
+        raise ValueError(
+            f"Invalid Qwen input schema_version={schema_version!r}; "
+            f"expected {QWEN_INPUT_SCHEMA_VERSION!r}."
+        )
+    videos = dataset.get("videos")
+    if not isinstance(videos, list):
+        raise ValueError("Invalid Qwen input: top-level 'videos' must be a list.")
+
+    valid: list[dict[str, Any]] = []
+    for index, record in enumerate(videos):
+        if not isinstance(record, dict):
+            print(f"[input] skip non-dict video record index={index}")
+            continue
+        if not record.get("video_id") or not record.get("video_path"):
+            print(f"[input] skip incomplete record index={index}")
+            continue
+        candidates = record.get("sam3_candidates")
+        if not isinstance(candidates, list):
+            print(f"[input] skip record with non-list sam3_candidates: {record['video_id']}")
+            continue
+        valid.append(record)
+    return valid
+
+
 class Sam3Runner:
-    """One resident official SAM3 predictor, with one active video session."""
+    """One resident official SAM3 predictor with one active video session."""
 
     def __init__(self) -> None:
         if not SAM3_SOURCE_ROOT.is_dir():
             raise FileNotFoundError(f"SAM3_SOURCE_ROOT does not exist: {SAM3_SOURCE_ROOT}")
         if not SAM3_CHECKPOINT_PATH.is_file():
-            raise FileNotFoundError(f"SAM3_CHECKPOINT_PATH does not exist: {SAM3_CHECKPOINT_PATH}")
+            raise FileNotFoundError(
+                f"SAM3_CHECKPOINT_PATH does not exist: {SAM3_CHECKPOINT_PATH}"
+            )
         if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is required for this SAM3 smoke-test script.")
-
+            raise RuntimeError("CUDA is required for SAM3 tracking.")
         self.predictor = build_sam3_video_predictor(
             checkpoint_path=str(SAM3_CHECKPOINT_PATH),
             gpus_to_use=[0],
@@ -207,13 +286,14 @@ class Sam3Runner:
         )
 
     def propagate(self, session_id: str):
-        request = {
-            "type": "propagate_in_video",
-            "session_id": session_id,
-            "propagation_direction": SAM3_PROPAGATION_DIRECTION,
-            "output_prob_thresh": SAM3_OUTPUT_PROB_THRESH,
-        }
-        yield from self.predictor.handle_stream_request(request)
+        yield from self.predictor.handle_stream_request(
+            {
+                "type": "propagate_in_video",
+                "session_id": session_id,
+                "propagation_direction": SAM3_PROPAGATION_DIRECTION,
+                "output_prob_thresh": SAM3_OUTPUT_PROB_THRESH,
+            }
+        )
 
     def close_session(self, session_id: str) -> dict[str, Any]:
         return self.predictor.handle_request(
@@ -226,123 +306,175 @@ class Sam3Runner:
         )
 
     def shutdown(self) -> None:
-        # Important for the later multi-GPU implementation. Safe on one GPU too.
         self.predictor.shutdown()
+
+
+def save_sparse_mask_tube(
+    video_id: str,
+    candidate_id: str,
+    sam_object_id: int,
+    frame_indices: list[int],
+    masks: list[np.ndarray],
+) -> str | None:
+    if not SAM3_SAVE_MASK_TUBES or not masks:
+        return None
+    target_dir = SAM3_TRACK_MASK_ROOT / video_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"{candidate_id}__obj_{sam_object_id}.npz"
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(temp_path, "wb") as handle:
+        np.savez_compressed(
+            handle,
+            frame_indices=np.asarray(frame_indices, dtype=np.int32),
+            masks=np.stack(masks, axis=0).astype(np.uint8, copy=False),
+        )
+    temp_path.replace(path)
+    return str(path)
+
+
+def track_quality(track: dict[str, Any]) -> tuple[str, list[str], float]:
+    reasons: list[str] = []
+    if track["visible_frame_ratio"] < SAM3_MIN_VISIBLE_FRAME_RATIO:
+        reasons.append("visible_frame_ratio")
+    if track["longest_visible_run"] < SAM3_MIN_LONGEST_VISIBLE_RUN:
+        reasons.append("longest_visible_run")
+    if track["median_area_ratio"] < SAM3_MIN_MEDIAN_AREA_RATIO:
+        reasons.append("median_area_ratio_too_small")
+    if track["median_area_ratio"] > SAM3_MAX_MEDIAN_AREA_RATIO:
+        reasons.append("median_area_ratio_too_large")
+    if track["border_touch_ratio"] > SAM3_MAX_BORDER_TOUCH_RATIO:
+        reasons.append("border_touch_ratio")
+
+    area = track["median_area_ratio"]
+    area_quality = 1.0 if SAM3_MIN_MEDIAN_AREA_RATIO <= area <= SAM3_MAX_MEDIAN_AREA_RATIO else 0.0
+    stability = min(track["longest_visible_run"] / max(track["propagation_frame_count"], 1), 1.0)
+    interior = 1.0 - track["border_touch_ratio"]
+    score = (
+        0.40 * track["visible_frame_ratio"]
+        + 0.25 * stability
+        + 0.15 * area_quality
+        + 0.10 * interior
+        + 0.10 * (track["mean_detection_score"] or 0.0)
+    )
+    return ("pass" if not reasons else "fail"), reasons, round(score, 6)
 
 
 def collect_candidate_tracks(
     runner: Sam3Runner,
     session_id: str,
+    video_id: str,
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
-    """Track exactly one text concept in a reset video session.
-
-    Resetting before each candidate prevents a later text prompt from inheriting
-    the detector/tracker state of a previous semantic concept.
-    """
+    """Run one semantic concept and retain every returned SAM3 object identity."""
     runner.reset_session(session_id)
     add_response = runner.add_text_prompt(session_id, candidate["sam_prompt"])
 
     objects: dict[int, dict[str, Any]] = defaultdict(
-        lambda: {"frames": [], "areas": [], "area_ratios": [], "scores": [], "boxes_xywh": []}
+        lambda: {
+            "frames": [],
+            "masks": [],
+            "area_ratios": [],
+            "scores": [],
+            "boxes_xywh": [],
+            "border_touches": [],
+        }
     )
-    frame_count_seen = 0
+    propagation_frame_count = 0
     frame_shape: tuple[int, int] | None = None
     output_keys_seen: set[str] = set()
 
     for item in runner.propagate(session_id):
+        if not isinstance(item, dict) or "frame_index" not in item:
+            continue
         frame_index = int(item["frame_index"])
         outputs = item.get("outputs")
         if not isinstance(outputs, dict):
             continue
         output_keys_seen.update(outputs.keys())
-        frame_count_seen += 1
+        propagation_frame_count += 1
 
-        object_ids = np.asarray(outputs.get("out_obj_ids", []))
-        masks = np.asarray(outputs.get("out_binary_masks", []))
-        boxes = np.asarray(outputs.get("out_boxes_xywh", []))
-        scores = np.asarray(outputs.get("out_probs", []))
+        object_ids = as_numpy(outputs.get("out_obj_ids", []))
+        masks = as_numpy(outputs.get("out_binary_masks", []))
+        boxes = as_numpy(outputs.get("out_boxes_xywh", []))
+        scores = as_numpy(outputs.get("out_probs", []))
 
+        if masks.ndim == 2:
+            masks = masks[None, ...]
         if masks.ndim == 3 and masks.shape[0] > 0:
             frame_shape = (int(masks.shape[1]), int(masks.shape[2]))
+        if object_ids.ndim == 0:
+            object_ids = object_ids.reshape(1)
 
-        for item_index, raw_object_id in enumerate(object_ids.tolist()):
+        for item_index, raw_object_id in enumerate(object_ids.reshape(-1).tolist()):
             if item_index >= len(masks):
                 continue
             mask = np.asarray(masks[item_index], dtype=bool)
             if mask.ndim != 2 or not mask.any():
                 continue
-
-            object_id = int(raw_object_id)
-            area = int(mask.sum())
-            total_pixels = int(mask.shape[0] * mask.shape[1])
-            area_ratio = area / max(total_pixels, 1)
+            area_ratio = float(mask.mean())
             box = boxes[item_index].tolist() if item_index < len(boxes) else None
             score = safe_float(scores[item_index]) if item_index < len(scores) else None
-
-            state = objects[object_id]
+            state = objects[int(raw_object_id)]
             state["frames"].append(frame_index)
-            state["areas"].append(area)
+            state["masks"].append(mask)
             state["area_ratios"].append(area_ratio)
+            state["border_touches"].append(border_touched(mask))
+            state["boxes_xywh"].append({"frame_index": frame_index, "bbox_xywh_norm": box})
             if score is not None:
                 state["scores"].append(score)
-            state["boxes_xywh"].append(
-                {"frame_index": frame_index, "bbox_xywh_norm": box}
-            )
 
-    track_summaries: list[dict[str, Any]] = []
-    for object_id, state in objects.items():
+    tracks: list[dict[str, Any]] = []
+    for sam_object_id, state in objects.items():
         frames = state["frames"]
         area_ratios = state["area_ratios"]
-        longest_run = longest_consecutive_run(frames)
-        visible_frame_ratio = len(frames) / max(frame_count_seen, 1)
         median_area_ratio = float(np.median(area_ratios)) if area_ratios else 0.0
         mean_area_ratio = float(np.mean(area_ratios)) if area_ratios else 0.0
-        mean_score = float(np.mean(state["scores"])) if state["scores"] else None
-        track_summaries.append(
-            {
-                "sam_object_id": object_id,
-                "first_frame_index": min(frames),
-                "last_frame_index": max(frames),
-                "visible_frame_count": len(frames),
-                "visible_frame_ratio": round(visible_frame_ratio, 6),
-                "longest_visible_run": longest_run,
-                "median_area_ratio": round(median_area_ratio, 8),
-                "mean_area_ratio": round(mean_area_ratio, 8),
-                "mean_detection_score": None if mean_score is None else round(mean_score, 6),
-                # This compact tube is intentional for the smoke test. Dense masks
-                # are not yet persisted until the response contract is inspected.
-                "bbox_tube_xywh_norm": state["boxes_xywh"],
-            }
-        )
+        std_area_ratio = float(np.std(area_ratios)) if area_ratios else 0.0
+        track: dict[str, Any] = {
+            "track_id": f"{video_id}__{candidate['candidate_id']}__obj_{sam_object_id}",
+            "sam_object_id": int(sam_object_id),
+            "first_frame_index": min(frames),
+            "last_frame_index": max(frames),
+            "visible_frame_count": len(frames),
+            "propagation_frame_count": propagation_frame_count,
+            "visible_frame_ratio": round(len(frames) / max(propagation_frame_count, 1), 6),
+            "longest_visible_run": longest_consecutive_run(frames),
+            "median_area_ratio": round(median_area_ratio, 8),
+            "mean_area_ratio": round(mean_area_ratio, 8),
+            "std_area_ratio": round(std_area_ratio, 8),
+            "mean_detection_score": round(float(np.mean(state["scores"])), 6) if state["scores"] else None,
+            "border_touch_ratio": round(float(np.mean(state["border_touches"])) if state["border_touches"] else 0.0, 6),
+            "bbox_tube_xywh_norm": state["boxes_xywh"],
+            "mask_tube_path": save_sparse_mask_tube(
+                video_id,
+                candidate["candidate_id"],
+                int(sam_object_id),
+                frames,
+                state["masks"],
+            ),
+        }
+        status, reasons, score = track_quality(track)
+        track["quality_status"] = status
+        track["quality_reasons"] = reasons
+        track["track_quality_score"] = score
+        tracks.append(track)
 
-    def candidate_track_score(track: dict[str, Any]) -> float:
-        # A deliberately simple smoke-test score, not the final focus-region ranker.
-        stability = min(track["longest_visible_run"] / max(frame_count_seen, 1), 1.0)
-        area = track["median_area_ratio"]
-        area_quality = 1.0 if 0.002 <= area <= 0.90 else 0.0
-        det_score = track["mean_detection_score"] or 0.0
-        return 0.55 * track["visible_frame_ratio"] + 0.25 * stability + 0.12 * area_quality + 0.08 * det_score
-
-    for track in track_summaries:
-        track["candidate_track_score"] = round(candidate_track_score(track), 6)
-    track_summaries.sort(key=lambda item: item["candidate_track_score"], reverse=True)
-
+    tracks.sort(key=lambda item: item["track_quality_score"], reverse=True)
     return {
         "candidate_id": candidate["candidate_id"],
-        "sam_prompt": candidate["sam_prompt"],
+        "region_family": candidate["region_family"],
+        "candidate_class": candidate["candidate_class"],
+        "canonical_concept": candidate["canonical_concept"],
         "display_phrase": candidate["display_phrase"],
-        "region_family": candidate.get("region_family"),
-        "editable_priority": candidate.get("editable_priority"),
-        "add_prompt_output_keys": sorted(add_response.get("outputs", {}).keys())
-        if isinstance(add_response.get("outputs"), dict)
-        else None,
-        "propagation_frame_count": frame_count_seen,
+        "sam_prompt": candidate["sam_prompt"],
+        "instance_count_hint": candidate["instance_count_hint"],
+        "visual_disambiguators": candidate["visual_disambiguators"],
+        "add_prompt_output_keys": sorted(add_response.get("outputs", {}).keys()) if isinstance(add_response.get("outputs"), dict) else None,
+        "propagation_frame_count": propagation_frame_count,
         "mask_frame_height_width": list(frame_shape) if frame_shape else None,
         "propagation_output_keys": sorted(output_keys_seen),
-        "tracks": track_summaries,
-        "best_track": track_summaries[0] if track_summaries else None,
-        "status": "success" if track_summaries else "no_track",
+        "tracks": tracks,
+        "status": "success" if tracks else "no_track",
     }
 
 
@@ -356,30 +488,29 @@ def process_video(runner: Sam3Runner, video: dict[str, Any]) -> dict[str, Any]:
         "video_path": video_path,
         "status": "failure",
         "candidate_results": [],
-        "focus_track": None,
         "created_at_utc": utc_now(),
         "gpu_memory_before": gpu_memory_snapshot(),
     }
 
-    raw_candidates = video.get("sam3_candidates", [])
+    raw_candidates = video.get("sam3_candidates")
     if not isinstance(raw_candidates, list):
         result["error"] = "sam3_candidates is not a list"
         return result
 
-    normalized: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    candidates: list[dict[str, Any]] = []
+    input_errors: list[str] = []
     for index, raw_candidate in enumerate(raw_candidates[:SAM3_MAX_CANDIDATES_PER_VIDEO]):
-        candidate, warning = normalize_candidate(raw_candidate, index)
-        if warning:
-            warnings.append(f"candidate[{index}]: {warning}")
-        if candidate is not None:
-            normalized.append(candidate)
+        candidate, error = validate_candidate(raw_candidate, index)
+        if error is not None:
+            input_errors.append(error)
+        elif candidate is not None:
+            candidates.append(candidate)
 
     result["input_candidate_count"] = len(raw_candidates)
-    result["processed_candidate_count"] = len(normalized)
-    if warnings:
-        result["input_warnings"] = warnings
-    if not normalized:
+    result["processed_candidate_count"] = len(candidates)
+    if input_errors:
+        result["input_errors"] = input_errors
+    if not candidates:
         result["status"] = "no_valid_candidate"
         result["elapsed_seconds"] = round(time.perf_counter() - started, 3)
         result["gpu_memory_after"] = gpu_memory_snapshot()
@@ -388,10 +519,10 @@ def process_video(runner: Sam3Runner, video: dict[str, Any]) -> dict[str, Any]:
     session_id: str | None = None
     try:
         session_id = runner.start_session(video_path)
-        for candidate in normalized:
+        for candidate in candidates:
             try:
-                candidate_result = collect_candidate_tracks(runner, session_id, candidate)
-            except Exception as exc:  # preserve other candidates when one prompt fails
+                candidate_result = collect_candidate_tracks(runner, session_id, video_id, candidate)
+            except Exception as exc:
                 candidate_result = {
                     "candidate_id": candidate["candidate_id"],
                     "sam_prompt": candidate["sam_prompt"],
@@ -399,27 +530,17 @@ def process_video(runner: Sam3Runner, video: dict[str, Any]) -> dict[str, Any]:
                     "status": "failure",
                     "error_type": type(exc).__name__,
                     "error": str(exc),
-                    "traceback_tail": traceback.format_exc(limit=4),
+                    "traceback_tail": traceback.format_exc(limit=5),
                 }
             result["candidate_results"].append(candidate_result)
 
-        viable = [
-            item for item in result["candidate_results"]
-            if item.get("status") == "success" and isinstance(item.get("best_track"), dict)
-        ]
-        if viable:
-            def focus_score(item: dict[str, Any]) -> float:
-                best = item["best_track"]
-                priority = safe_float(item.get("editable_priority")) or 0.0
-                return float(best["candidate_track_score"]) + 0.01 * priority
-
-            result["focus_track"] = max(viable, key=focus_score)
+        candidate_statuses = [item.get("status") for item in result["candidate_results"]]
+        if "success" in candidate_statuses:
             result["status"] = "success"
-        elif any(item.get("status") == "no_track" for item in result["candidate_results"]):
+        elif "no_track" in candidate_statuses:
             result["status"] = "no_track"
         else:
             result["status"] = "failure"
-
     except Exception as exc:
         result["error_type"] = type(exc).__name__
         result["error"] = str(exc)
@@ -435,23 +556,87 @@ def process_video(runner: Sam3Runner, video: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def build_summary(dataset: Any, videos: list[dict[str, Any]], results: list[dict[str, Any]], elapsed: float) -> dict[str, Any]:
-    statuses = defaultdict(int)
+def flatten_quality_tracks(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    tracks: list[dict[str, Any]] = []
+    for video_result in results:
+        for candidate_result in video_result.get("candidate_results", []):
+            if not isinstance(candidate_result, dict):
+                continue
+            for track in candidate_result.get("tracks", []):
+                if not isinstance(track, dict) or track.get("quality_status") != "pass":
+                    continue
+                tracks.append({
+                    "video_id": video_result["video_id"],
+                    "relative_path": video_result.get("relative_path"),
+                    "video_path": video_result["video_path"],
+                    "candidate_id": candidate_result["candidate_id"],
+                    "candidate_class": candidate_result.get("candidate_class"),
+                    "canonical_concept": candidate_result.get("canonical_concept"),
+                    "display_phrase": candidate_result.get("display_phrase"),
+                    "sam_prompt": candidate_result.get("sam_prompt"),
+                    **track,
+                })
+    return tracks
+
+
+def build_summary(dataset: dict[str, Any], videos: list[dict[str, Any]], results: list[dict[str, Any]], elapsed_seconds: float) -> dict[str, Any]:
+    statuses: dict[str, int] = defaultdict(int)
+    candidate_statuses: dict[str, int] = defaultdict(int)
+    all_tracks = 0
+    quality_tracks = 0
     for result in results:
         statuses[result["status"]] += 1
+        for candidate_result in result.get("candidate_results", []):
+            if not isinstance(candidate_result, dict):
+                continue
+            candidate_statuses[candidate_result.get("status", "unknown")] += 1
+            candidate_tracks = candidate_result.get("tracks", [])
+            if isinstance(candidate_tracks, list):
+                all_tracks += len(candidate_tracks)
+                quality_tracks += sum(track.get("quality_status") == "pass" for track in candidate_tracks if isinstance(track, dict))
     return {
         "schema_version": SAM3_SCHEMA_VERSION,
         "created_at_utc": utc_now(),
         "input_file": str(QWEN_SAM3_CANDIDATES_PATH),
-        "input_schema_version": dataset.get("schema_version") if isinstance(dataset, dict) else None,
+        "input_schema_version": dataset.get("schema_version"),
         "input_video_records": len(videos),
         "processed_videos": len(results),
-        "status_totals": dict(statuses),
-        "elapsed_seconds": round(elapsed, 3),
-        "throughput_videos_per_min": round(len(results) / max(elapsed, 1e-9) * 60.0, 3),
+        "video_status_totals": dict(statuses),
+        "candidate_status_totals": dict(candidate_statuses),
+        "track_totals": {
+            "all_tracks": all_tracks,
+            "quality_pass_tracks": quality_tracks,
+            "mask_tubes_saved": SAM3_SAVE_MASK_TUBES,
+        },
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "throughput_videos_per_min": round(len(results) / max(elapsed_seconds, 1e-9) * 60.0, 3),
         "sam3_source_root": str(SAM3_SOURCE_ROOT),
         "sam3_checkpoint_path": str(SAM3_CHECKPOINT_PATH),
     }
+
+
+def write_outputs(dataset: dict[str, Any], videos: list[dict[str, Any]], results: list[dict[str, Any]], started: float) -> None:
+    aggregate = {
+        "schema_version": SAM3_SCHEMA_VERSION,
+        "created_at_utc": utc_now(),
+        "input_file": str(QWEN_SAM3_CANDIDATES_PATH),
+        "videos": results,
+    }
+    failures = [result for result in results if result.get("status") == "failure"]
+    quality_tracks = flatten_quality_tracks(results)
+    summary = build_summary(dataset, videos, results, time.perf_counter() - started)
+    atomic_write_json(SAM3_TRACKS_ALL_PATH, aggregate)
+    atomic_write_json(SAM3_QUALITY_TRACKS_PATH, {
+        "schema_version": SAM3_SCHEMA_VERSION,
+        "created_at_utc": utc_now(),
+        "tracks": quality_tracks,
+    })
+    atomic_write_json(SAM3_FAILURES_PATH, {
+        "schema_version": SAM3_SCHEMA_VERSION,
+        "created_at_utc": utc_now(),
+        "failures": failures,
+    })
+    atomic_write_json(SAM3_RUN_SUMMARY_PATH, summary)
 
 
 def main() -> None:
@@ -461,7 +646,7 @@ def main() -> None:
     if SAM3_MAX_VIDEOS is not None:
         videos = videos[:SAM3_MAX_VIDEOS]
     if not videos:
-        raise RuntimeError("No valid videos were found in qwen_sam3_candidates.json.")
+        raise RuntimeError("No valid videos were found in Qwen v4 sam3_candidates.json.")
 
     print(f"[input] selected {len(videos)} video(s) from {QWEN_SAM3_CANDIDATES_PATH}")
     runner = Sam3Runner()
@@ -471,47 +656,13 @@ def main() -> None:
             print(f"[video {index}/{len(videos)}] {video['video_id']}")
             result = process_video(runner, video)
             results.append(result)
-            print(
-                f"[video {index}/{len(videos)}] status={result['status']} "
-                f"elapsed={result['elapsed_seconds']}s"
-            )
+            write_outputs(dataset, videos, results, started)
+            print(f"[video {index}/{len(videos)}] status={result['status']} elapsed={result['elapsed_seconds']}s")
     finally:
         runner.shutdown()
 
-    aggregate = {
-        "schema_version": SAM3_SCHEMA_VERSION,
-        "created_at_utc": utc_now(),
-        "input_file": str(QWEN_SAM3_CANDIDATES_PATH),
-        "videos": results,
-    }
-    failures = [result for result in results if result["status"] == "failure"]
-    focus_regions = [
-        {
-            "video_id": result["video_id"],
-            "relative_path": result.get("relative_path"),
-            "video_path": result["video_path"],
-            "focus_track": result["focus_track"],
-        }
-        for result in results
-        if result["status"] == "success" and result.get("focus_track") is not None
-    ]
-    summary = build_summary(dataset, videos, results, time.perf_counter() - started)
-
-    atomic_write_json(SAM3_TRACKS_ALL_PATH, aggregate)
-    atomic_write_json(SAM3_FOCUS_REGIONS_PATH, {
-        "schema_version": SAM3_SCHEMA_VERSION,
-        "created_at_utc": utc_now(),
-        "focus_regions": focus_regions,
-    })
-    atomic_write_json(SAM3_FAILURES_PATH, {
-        "schema_version": SAM3_SCHEMA_VERSION,
-        "created_at_utc": utc_now(),
-        "failures": failures,
-    })
-    atomic_write_json(SAM3_RUN_SUMMARY_PATH, summary)
-
-    print(f"[done] tracks: {SAM3_TRACKS_ALL_PATH}")
-    print(f"[done] focus regions: {SAM3_FOCUS_REGIONS_PATH}")
+    print(f"[done] track bank: {SAM3_TRACKS_ALL_PATH}")
+    print(f"[done] quality tracks: {SAM3_QUALITY_TRACKS_PATH}")
     print(f"[done] summary: {SAM3_RUN_SUMMARY_PATH}")
 
 
