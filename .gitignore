@@ -1,0 +1,65 @@
+# Python / editor / OS
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local model assets and offline installation caches
+models/
+model_cache/
+checkpoints/
+weights/
+pretrained/
+offline_wheels/
+pip_wheels/
+wheelhouse/
+.hf_cache/
+.cache/
+
+# VACE / Wan runtime outputs and logs
+logs/
+wandb/
+tensorboard/
+outputs/
+runs/
+
+# Data A generated artifacts. Keep plans, registries, configs, scripts and docs tracked.
+res/dataA_v1/attempts/
+res/dataA_v1/reports/
+res/dataA_v1/cache/
+
+# Large local media and mask artifacts. Test fixtures can opt out explicitly if ever needed.
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.gif
+*.npz
+*.npy
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+*.onnx
+*.tar
+*.tar.gz
+*.zip
+*.7z
+
+# Never ignore source-of-truth metadata.
+!*.json
+!*.yaml
+!*.yml
+!*.md
+!*.py
