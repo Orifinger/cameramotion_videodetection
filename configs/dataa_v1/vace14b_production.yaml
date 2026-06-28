@@ -4,7 +4,7 @@ run:
   oss_prefix: oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/dataA_v1/vace14b
 
 execution:
-  full_execution_plan: null
+  full_execution_plan: res/dataA_v1/plans/frozen_full_vace_execution_plan.json
   resume: true
   strict: true
   allow_reshard: false

@@ -18,7 +18,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "oss_prefix": "oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/dataA_v1/vace14b",
     },
     "execution": {
-        "full_execution_plan": None,
+        "full_execution_plan": "res/dataA_v1/plans/frozen_full_vace_execution_plan.json",
         "resume": True,
         "strict": True,
         "allow_reshard": False,
