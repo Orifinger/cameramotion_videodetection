@@ -21,6 +21,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "full_execution_plan": "res/dataA_v1/plans/frozen_full_vace_execution_plan.json",
         "resume": True,
         "strict": True,
+        "block_invalid_cases": True,
         "allow_reshard": False,
     },
     "vace": {

@@ -26,6 +26,7 @@ TERMINAL_STATUSES = {
     "blocked_donor_reference_failure",
     "blocked_vace_generation_failure",
     "blocked_packaging_failure",
+    "blocked_plan_validation_failure",
 }
 
 

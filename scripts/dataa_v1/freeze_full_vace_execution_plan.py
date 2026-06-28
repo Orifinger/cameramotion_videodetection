@@ -65,6 +65,11 @@ def freeze_full_plan(
     passed_specs: list[CanonicalCaseSpec] = []
     for case in cases:
         audit = audit_case(case)
+        case_validation = validate_execution_cases([case])
+        if not case_validation["valid"]:
+            audit["stage_status"] = "blocked_plan_validation_failure"
+            audit["blockers"] = list(audit.get("blockers") or []) + case_validation["errors"]
+            audit["execution_plan_validation"] = case_validation
         if audit["stage_status"] == "preflight_passed":
             frozen_cases.append(_freeze_case(case, audit))
             passed_specs.append(case)

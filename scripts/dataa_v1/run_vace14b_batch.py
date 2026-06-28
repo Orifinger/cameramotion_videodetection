@@ -50,6 +50,14 @@ def _resolve_execution_plan(args: argparse.Namespace, config: Dict[str, Any], *,
     return path if path and path.is_file() else None
 
 
+def _validation_error_case_id(error: str, case_ids: set[str]) -> str | None:
+    parts = str(error).split(":")
+    for part in parts[1:4]:
+        if part in case_ids:
+            return part
+    return None
+
+
 def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
     config_path = _resolve_project_path(args.config)
     config = apply_cli_overrides(
@@ -88,14 +96,45 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
         path_mapping = _resolve_project_path(args.path_mapping) if args.path_mapping else None
         plan = load_execution_plan(execution_plan_path=execution_plan_path, track_bank_path=track_bank, path_mapping_path=path_mapping)
         plan_report["execution_plan_validation"] = plan.validation
-        if not plan.validation["valid"] and config["execution"].get("strict", True):
-            raise DataAError(f"full execution plan validation failed: {plan.validation['errors']}")
+        case_by_id = {case.case_id: case for case in plan.cases}
+        blocked_case_errors: Dict[str, list[str]] = {}
+        fatal_validation_errors: list[str] = []
+        if not plan.validation["valid"]:
+            all_case_ids = set(case_by_id)
+            for error in plan.validation["errors"]:
+                case_id = _validation_error_case_id(str(error), all_case_ids)
+                if case_id and bool(config["execution"].get("block_invalid_cases", True)):
+                    blocked_case_errors.setdefault(case_id, []).append(str(error))
+                else:
+                    fatal_validation_errors.append(str(error))
+            if fatal_validation_errors and config["execution"].get("strict", True):
+                raise DataAError(f"full execution plan validation failed: {fatal_validation_errors}")
+            if blocked_case_errors:
+                blocked_report = {
+                    "status": "blocked_plan_validation_failure",
+                    "execution_plan": str(execution_plan_path),
+                    "blocked_count": len(blocked_case_errors),
+                    "blocked_cases": [
+                        {
+                            "case_id": case_id,
+                            "errors": errors,
+                            "case": serialize_case(case_by_id[case_id], include_raw=True),
+                        }
+                        for case_id, errors in sorted(blocked_case_errors.items())
+                    ],
+                }
+                write_json(paths.coordinator_dir / "blocked_execution_plan_cases.json", blocked_report)
+                plan_report["blocked_execution_plan_cases"] = blocked_report
+                for case_id, errors in blocked_case_errors.items():
+                    state.append_status(case_id, "blocked_plan_validation_failure", worker_id=None, detail={"errors": errors})
         case_ids = [case.case_id for case in plan.cases]
         if args.case_id:
             case_ids = [case_id for case_id in case_ids if case_id == args.case_id]
+        case_ids = [case_id for case_id in case_ids if case_id not in blocked_case_errors]
         if args.max_cases is not None:
             case_ids = case_ids[: args.max_cases]
-        case_by_id = {case.case_id: case for case in plan.cases}
+        if not case_ids and args.execute:
+            raise DataAError("no runnable cases after execution plan blockers were removed")
         shards = shard_cases(case_ids, run_id, topology)
         plan_report["shards"] = {str(worker_id): ids for worker_id, ids in shards.items()}
         paths.coordinator_dir.mkdir(parents=True, exist_ok=True)
