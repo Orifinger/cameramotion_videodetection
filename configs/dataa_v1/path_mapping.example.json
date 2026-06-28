@@ -1,0 +1,16 @@
+{
+  "schema_version": "dataA_v1_path_mapping_v1",
+  "description": "Template only. Copy outside Git or create a server-local override with real persistent destinations.",
+  "volatile_prefixes": [
+    "/tmp",
+    "/var/tmp"
+  ],
+  "rules": [
+    {
+      "source_prefix": "/tmp/cameramotion_det/res/sam_track_bank/track_masks_v1",
+      "persistent_prefix": "oss://YOUR_BUCKET/YOUR_PREFIX/track_masks_v1",
+      "status": "planned_or_verified"
+    }
+  ],
+  "explicit_overrides": {}
+}
