@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 from PIL import Image
+import subprocess
 from scipy import ndimage
 
 from .common import DataAError, write_json
@@ -108,3 +109,67 @@ def export_synthetic_donor_reference(out_dir: Path, tube: MaskTube) -> Dict[str,
     write_json(meta_path, meta)
     return meta
 
+
+def export_donor_reference_from_video(
+    *,
+    out_dir: Path,
+    tube: MaskTube,
+    donor_video_path: str,
+    ffmpeg_bin: str = "ffmpeg",
+    crop_padding_px: int = 8,
+) -> Dict[str, Any]:
+    choice = choose_donor_frame(tube)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frame_path = out_dir / ".donor_selected_frame.png"
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        donor_video_path,
+        "-vf",
+        f"select=eq(n\\,{choice.frame_index})",
+        "-vframes",
+        "1",
+        str(frame_path),
+    ]
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if proc.returncode != 0 or not frame_path.is_file():
+        raise DataAError(f"blocked_donor_reference_failure: ffmpeg frame extraction failed: {proc.stderr.strip()}")
+    image = Image.open(frame_path).convert("RGB")
+    pos = int(np.where(tube.frame_indices == choice.frame_index)[0][0])
+    mask = tube.masks[pos].astype(np.uint8)
+    x, y, w, h = choice.bbox_xywh
+    x0 = max(0, x - crop_padding_px)
+    y0 = max(0, y - crop_padding_px)
+    x1 = min(image.width, x + w + crop_padding_px)
+    y1 = min(image.height, y + h + crop_padding_px)
+    crop = np.asarray(image.crop((x0, y0, x1, y1))).copy()
+    alpha = mask[y0:y1, x0:x1] * 255
+    if crop.shape[:2] != alpha.shape:
+        alpha_img = Image.fromarray(alpha).resize((crop.shape[1], crop.shape[0]), Image.Resampling.NEAREST)
+        alpha = np.asarray(alpha_img)
+    white = np.full_like(crop, 255)
+    composed = np.where(alpha[:, :, None] > 0, crop, white).astype(np.uint8)
+    rgb_path = out_dir / "donor_reference.png"
+    alpha_path = out_dir / "donor_reference_alpha.png"
+    meta_path = out_dir / "donor_reference_meta.json"
+    Image.fromarray(composed).save(rgb_path)
+    Image.fromarray(alpha.astype(np.uint8)).save(alpha_path)
+    try:
+        frame_path.unlink()
+    except OSError:
+        pass
+    meta = {
+        "source_frame": choice.frame_index,
+        "bbox_xywh": list(choice.bbox_xywh),
+        "crop_xyxy": [x0, y0, x1, y1],
+        "crop_padding_px": crop_padding_px,
+        "score": choice.score,
+        "score_components": choice.components,
+        "donor_rgb_usage": "reference_condition_only_never_target_compositing",
+        "donor_reference": str(rgb_path),
+        "donor_reference_alpha": str(alpha_path),
+        "ffmpeg_command": cmd,
+    }
+    write_json(meta_path, meta)
+    return meta

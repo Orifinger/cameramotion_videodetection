@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .clip_selection import ClipSelection, VaceProfile
+from .common import DataAError
+from .media_io import export_canonical_source_clip, export_source_real_raw, ffprobe_video
 
 
 def canonical_video_plan(attempt_dir: Path, clip: ClipSelection, profile: VaceProfile, *, source_video_path: str | None) -> Dict[str, Any]:
@@ -38,3 +40,40 @@ def canonical_video_plan(attempt_dir: Path, clip: ClipSelection, profile: VacePr
         "note": "dry-run scaffold records planned canonical media; server execution must render actual mp4 files",
     }
 
+
+def export_canonical_videos(
+    *,
+    attempt_dir: Path,
+    source_video_path: str,
+    clip: ClipSelection,
+    profile: VaceProfile,
+    ffmpeg_bin: str = "ffmpeg",
+    ffprobe_bin: str = "ffprobe",
+) -> Dict[str, Any]:
+    height, width = profile.landscape_size
+    raw_path = attempt_dir / "source_real_raw.mp4"
+    clip_path = attempt_dir / "source_clip.mp4"
+    raw = export_source_real_raw(
+        source_video=Path(source_video_path),
+        out_path=raw_path,
+        start_frame=clip.source_start_frame,
+        end_frame=clip.source_end_frame,
+        source_fps=clip.source_fps,
+        ffmpeg_bin=ffmpeg_bin,
+    )
+    canonical = export_canonical_source_clip(
+        source_video=Path(source_video_path),
+        out_path=clip_path,
+        start_frame=clip.source_start_frame,
+        end_frame=clip.source_end_frame,
+        source_fps=clip.source_fps,
+        canonical_fps=clip.canonical_fps,
+        frame_count=clip.canonical_frame_count,
+        height=height,
+        width=width,
+        ffmpeg_bin=ffmpeg_bin,
+    )
+    meta = ffprobe_video(clip_path, ffprobe_bin=ffprobe_bin)
+    if meta.frame_count != clip.canonical_frame_count or round(meta.fps) != clip.canonical_fps or meta.height != height or meta.width != width:
+        raise DataAError(f"canonical source_clip validation failed: {meta}")
+    return {"source_real_raw": raw, "source_clip": canonical, "source_clip_meta": meta, "media_created": True}

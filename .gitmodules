@@ -1,3 +1,0 @@
-[submodule "third_party/VACE"]
-	path = third_party/VACE
-	url = https://github.com/ali-vilab/VACE.git

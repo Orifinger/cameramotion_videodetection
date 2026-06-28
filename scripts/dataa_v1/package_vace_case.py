@@ -18,14 +18,15 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.dataa_v1.audit_vace_stage1 import audit_case, load_cases_for_audit
-from scripts.dataa_v1.canonical_video import canonical_video_plan
-from scripts.dataa_v1.clip_selection import VaceProfile, select_clip
+from scripts.dataa_v1.canonical_video import canonical_video_plan, export_canonical_videos
+from scripts.dataa_v1.clip_selection import VaceProfile, profile_from_name, select_clip
 from scripts.dataa_v1.common import DataAError, utc_now_iso, write_json
-from scripts.dataa_v1.donor_reference import export_synthetic_donor_reference
+from scripts.dataa_v1.donor_reference import export_donor_reference_from_video, export_synthetic_donor_reference
 from scripts.dataa_v1.manifest import build_case_manifest, write_manifest
 from scripts.dataa_v1.mask_io import align_masks_to_canonical, load_mask_tube, save_mask_npz
 from scripts.dataa_v1.mask_processing import MaskProcessingConfig, process_masks
-from scripts.dataa_v1.mask_video import validate_mask_video_roundtrip, write_mask_video
+from scripts.dataa_v1.mask_video import validate_mask_video_roundtrip, write_mask_video, write_mask_video_ffmpeg
+from scripts.dataa_v1.media_io import ffprobe_video
 from scripts.dataa_v1.mask_visualization import planned_mask_visualizations
 from scripts.dataa_v1.prompt_builder import build_prompts
 from scripts.dataa_v1.schema import serialize_case
@@ -47,8 +48,12 @@ def package_case(
     out_dir: Path,
     path_mapping: Optional[Path] = None,
     source_fps: float = 30.0,
+    profile_name: str = "production_720",
     dry_run: bool = True,
     synthetic_media: bool = False,
+    execute_media: bool = False,
+    ffmpeg_bin: str = "ffmpeg",
+    ffprobe_bin: str = "ffprobe",
 ) -> dict[str, Any]:
     cases = load_cases_for_audit(plan, track_bank, path_mapping)
     case = _find_case(cases, case_id)
@@ -97,7 +102,12 @@ def package_case(
     if not target_path:
         raise DataAError("blocked_missing_mask: target resolved path is absent")
     target_tube = load_mask_tube(Path(target_path))
-    profile = VaceProfile()
+    profile = profile_from_name(profile_name)
+    if execute_media:
+        if not case.target.video_path:
+            raise DataAError("blocked_clip_selection_failure: target video_path is absent")
+        video_meta = ffprobe_video(Path(case.target.video_path), ffprobe_bin=ffprobe_bin)
+        source_fps = video_meta.fps
     try:
         clip = select_clip(target_tube, source_fps=source_fps, profile=profile)
     except DataAError as exc:
@@ -111,7 +121,7 @@ def package_case(
         "M_gen": str(attempt_dir / "target_mask_gen.npz"),
         "M_alpha": str(attempt_dir / "target_mask_alpha.npz"),
     }
-    if synthetic_media:
+    if synthetic_media or execute_media:
         save_mask_npz(Path(mask_layers["M_raw"]), masks["M_raw"])
         save_mask_npz(Path(mask_layers["M_edit"]), masks["M_edit"])
         save_mask_npz(Path(mask_layers["M_gen"]), masks["M_gen"])
@@ -120,7 +130,12 @@ def package_case(
     mask_video_path = attempt_dir / "target_mask_gen.mp4"
     roundtrip = {"status": "not_run_in_dry_run"}
     mask_video_write = {"status": "not_run_in_dry_run"}
-    if synthetic_media:
+    if execute_media:
+        mask_video_write = write_mask_video_ffmpeg(mask_video_path, masks["M_gen"], fps=profile.fps, ffmpeg_bin=ffmpeg_bin)
+        roundtrip = validate_mask_video_roundtrip(mask_video_path, masks["M_gen"], ffmpeg_bin=ffmpeg_bin)
+        if roundtrip["status"] != "ok":
+            raise DataAError("blocked_mask_video_mismatch")
+    elif synthetic_media:
         mask_video_write = write_mask_video(mask_video_path, masks["M_gen"], fps=profile.fps)
         roundtrip = validate_mask_video_roundtrip(mask_video_path, masks["M_gen"])
         if roundtrip["status"] != "ok":
@@ -130,14 +145,32 @@ def package_case(
     donor_reference_path = None
     if case.donor and case.donor.path and case.donor.path.resolved_path:
         donor_tube = load_mask_tube(Path(case.donor.path.resolved_path))
-        donor_meta = export_synthetic_donor_reference(attempt_dir, donor_tube) if synthetic_media else {
+        if execute_media:
+            if not case.donor.video_path:
+                raise DataAError("blocked_donor_reference_failure: donor video_path is absent")
+            donor_meta = export_donor_reference_from_video(out_dir=attempt_dir, tube=donor_tube, donor_video_path=case.donor.video_path, ffmpeg_bin=ffmpeg_bin)
+        elif synthetic_media:
+            donor_meta = export_synthetic_donor_reference(attempt_dir, donor_tube)
+        else:
+            donor_meta = {
             "status": "planned",
             "note": "server execution will crop donor RGB; dry-run does not read donor video pixels",
-        }
+            }
         donor_reference_path = str(attempt_dir / "donor_reference.png")
 
     prompts = build_prompts(case)
     source_clip = canonical_video_plan(attempt_dir, clip, profile, source_video_path=case.target.video_path)
+    if execute_media and case.target.video_path:
+        source_clip.update(
+            export_canonical_videos(
+                attempt_dir=attempt_dir,
+                source_video_path=case.target.video_path,
+                clip=clip,
+                profile=profile,
+                ffmpeg_bin=ffmpeg_bin,
+                ffprobe_bin=ffprobe_bin,
+            )
+        )
     command = build_vace_command_spec(
         case_id=case.case_id,
         vace_repo_dir="third_party/VACE",
@@ -150,7 +183,7 @@ def package_case(
     )
     manifest = build_case_manifest(
         case_id=case.case_id,
-        stage_status="packed" if synthetic_media else "planned",
+        stage_status="packed" if (synthetic_media or execute_media) else "planned",
         operation=case.operation,
         generator_route=case.generator_route,
         target=serialize_case(case)["target"],
@@ -184,8 +217,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--path-mapping", type=Path, default=None)
     parser.add_argument("--source-fps", type=float, default=30.0)
+    parser.add_argument("--profile", default="production_720")
     parser.add_argument("--dry-run", action="store_true", default=True)
     parser.add_argument("--synthetic-media", action="store_true", help="Only for synthetic tests; writes tiny mask/video/png artifacts.")
+    parser.add_argument("--execute-media", action="store_true", help="Use ffprobe/ffmpeg path for real media packaging.")
+    parser.add_argument("--ffmpeg-bin", default="ffmpeg")
+    parser.add_argument("--ffprobe-bin", default="ffprobe")
     return parser.parse_args(argv)
 
 
@@ -199,8 +236,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             out_dir=args.out_dir,
             path_mapping=args.path_mapping,
             source_fps=args.source_fps,
+            profile_name=args.profile,
             dry_run=args.dry_run,
             synthetic_media=args.synthetic_media,
+            execute_media=args.execute_media,
+            ffmpeg_bin=args.ffmpeg_bin,
+            ffprobe_bin=args.ffprobe_bin,
         )
     except DataAError as exc:
         print(str(exc), file=sys.stderr)

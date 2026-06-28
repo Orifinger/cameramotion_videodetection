@@ -7,6 +7,9 @@ from typing import Any, Dict, Iterable
 
 import imageio.v2 as imageio
 import numpy as np
+import subprocess
+import tempfile
+from PIL import Image
 
 from .common import DataAError
 
@@ -52,6 +55,47 @@ def write_mask_video(
     return {"path": str(path), "backend": backend, "fps": fps, "frame_count": int(masks.shape[0]), "height": int(masks.shape[1]), "width": int(masks.shape[2])}
 
 
+def write_mask_video_ffmpeg(path: Path, masks: np.ndarray, *, fps: int, ffmpeg_bin: str = "ffmpeg") -> Dict[str, Any]:
+    """Write a formal VACE mask video with lossless RGB encoding.
+
+    No fallback is allowed here. If ffmpeg is missing or the codec fails, the
+    caller gets a DataAError and must not invoke VACE.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frames = mask_frames_to_rgb(masks)
+    with tempfile.TemporaryDirectory(prefix=".mask_frames_", dir=str(path.parent)) as temp_dir:
+        temp = Path(temp_dir)
+        for index, frame in enumerate(frames):
+            Image.fromarray(frame).save(temp / f"{index:06d}.png")
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            str(temp / "%06d.png"),
+            "-c:v",
+            "libx264rgb",
+            "-crf",
+            "0",
+            "-pix_fmt",
+            "rgb24",
+            str(path),
+        ]
+        proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if proc.returncode != 0:
+        raise DataAError(f"ffmpeg mask video write failed: {proc.stderr.strip()}")
+    return {
+        "path": str(path),
+        "backend": "ffmpeg_libx264rgb_lossless",
+        "fps": fps,
+        "frame_count": int(masks.shape[0]),
+        "height": int(masks.shape[1]),
+        "width": int(masks.shape[2]),
+        "command": cmd,
+    }
+
+
 def read_mask_video(path: Path, *, allow_synthetic_npz_fallback: bool = False) -> np.ndarray:
     fallback = _fallback_path(path)
     if allow_synthetic_npz_fallback and fallback.is_file():
@@ -76,6 +120,30 @@ def read_mask_video(path: Path, *, allow_synthetic_npz_fallback: bool = False) -
     return np.stack(frames, axis=0)
 
 
+def read_mask_video_ffmpeg(path: Path, *, ffmpeg_bin: str = "ffmpeg") -> np.ndarray:
+    if not path.is_file():
+        raise DataAError(f"mask video does not exist: {path}")
+    with tempfile.TemporaryDirectory(prefix=".mask_decode_", dir=str(path.parent)) as temp_dir:
+        temp = Path(temp_dir)
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            str(path),
+            str(temp / "%06d.png"),
+        ]
+        proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+        if proc.returncode != 0:
+            raise DataAError(f"ffmpeg mask video decode failed: {proc.stderr.strip()}")
+        frames = []
+        for frame_path in sorted(temp.glob("*.png")):
+            arr = np.asarray(Image.open(frame_path).convert("RGB"))
+            frames.append((arr[:, :, 0] >= 128).astype(np.uint8))
+    if not frames:
+        raise DataAError(f"ffmpeg decoded zero mask frames: {path}")
+    return np.stack(frames, axis=0)
+
+
 def _iou(a: np.ndarray, b: np.ndarray) -> float:
     inter = np.logical_and(a > 0, b > 0).sum()
     union = np.logical_or(a > 0, b > 0).sum()
@@ -84,8 +152,19 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
     return float(inter / union)
 
 
-def validate_mask_video_roundtrip(path: Path, m_gen: np.ndarray, *, allow_synthetic_npz_fallback: bool = False) -> Dict[str, Any]:
-    decoded = read_mask_video(path, allow_synthetic_npz_fallback=allow_synthetic_npz_fallback)
+def validate_mask_video_roundtrip(
+    path: Path,
+    m_gen: np.ndarray,
+    *,
+    allow_synthetic_npz_fallback: bool = False,
+    ffmpeg_bin: str | None = None,
+) -> Dict[str, Any]:
+    if ffmpeg_bin:
+        decoded = read_mask_video_ffmpeg(path, ffmpeg_bin=ffmpeg_bin)
+        backend = "ffmpeg_decoded_video"
+    else:
+        decoded = read_mask_video(path, allow_synthetic_npz_fallback=allow_synthetic_npz_fallback)
+        backend = "synthetic_npz_sidecar" if allow_synthetic_npz_fallback and _fallback_path(path).is_file() else "decoded_video"
     frame_count_match = decoded.shape[0] == m_gen.shape[0]
     shape_match = decoded.shape == m_gen.shape
     if frame_count_match and shape_match:
@@ -100,7 +179,7 @@ def validate_mask_video_roundtrip(path: Path, m_gen: np.ndarray, *, allow_synthe
         "thresholded_iou_mean": float(np.mean(ious)),
         "thresholded_iou_min": float(np.min(ious)),
         "pixel_equal_after_threshold": pixel_equal,
-        "backend": "synthetic_npz_sidecar" if allow_synthetic_npz_fallback and _fallback_path(path).is_file() else "decoded_video",
+        "backend": backend,
     }
     report["status"] = "ok" if all(
         [

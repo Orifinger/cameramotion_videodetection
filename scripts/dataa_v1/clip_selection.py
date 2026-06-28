@@ -13,15 +13,23 @@ from .mask_io import MaskTube
 
 @dataclass(frozen=True)
 class VaceProfile:
-    name: str = "smoke_480"
+    name: str = "production_720"
     fps: int = 16
-    frame_options: tuple[int, ...] = (49, 65, 81)
-    landscape_size: tuple[int, int] = (480, 832)
-    portrait_size: tuple[int, int] = (832, 480)
+    frame_options: tuple[int, ...] = (81, 65, 49)
+    landscape_size: tuple[int, int] = (720, 1280)
+    portrait_size: tuple[int, int] = (1280, 720)
 
     @property
     def seconds_by_frames(self) -> Dict[int, int]:
         return {49: 3, 65: 4, 81: 5}
+
+
+def profile_from_name(name: str) -> VaceProfile:
+    if name == "production_720":
+        return VaceProfile()
+    if name == "smoke_480":
+        return VaceProfile(name="smoke_480", frame_options=(81, 65, 49), landscape_size=(480, 832), portrait_size=(832, 480))
+    raise DataAError(f"unknown VACE profile: {name}")
 
 
 @dataclass
@@ -130,4 +138,3 @@ def select_clip(
         canonical_to_source_frames=[float(v) for v in canonical_to_source],
         selection_meta=chosen,
     )
-
