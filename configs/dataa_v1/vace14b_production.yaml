@@ -14,6 +14,7 @@ vace:
   checkpoint_dir: /home/admin/wan2.1-VACE
   model_name: vace-14B
   profile: production_720
+  size: 720p
   seed: 20260629
   ffmpeg_bin: /input/tmp/ffmpeg/ffmpeg-7.0.2-amd64-static/ffmpeg
   ffprobe_bin: /input/tmp/ffmpeg/ffmpeg-7.0.2-amd64-static/ffprobe

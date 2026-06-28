@@ -23,6 +23,9 @@ TERMINAL_STATUSES = {
     "blocked_invalid_mask_npz",
     "blocked_clip_selection_failure",
     "blocked_mask_video_mismatch",
+    "blocked_donor_reference_failure",
+    "blocked_vace_generation_failure",
+    "blocked_packaging_failure",
 }
 
 

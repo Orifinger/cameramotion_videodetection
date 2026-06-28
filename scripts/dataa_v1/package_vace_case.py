@@ -22,6 +22,7 @@ from scripts.dataa_v1.canonical_video import canonical_video_plan, export_canoni
 from scripts.dataa_v1.clip_selection import VaceProfile, profile_from_name, select_clip
 from scripts.dataa_v1.common import DataAError, utc_now_iso, write_json
 from scripts.dataa_v1.donor_reference import export_donor_reference_from_video, export_synthetic_donor_reference
+from scripts.dataa_v1.execution_plan import load_execution_plan
 from scripts.dataa_v1.manifest import build_case_manifest, write_manifest
 from scripts.dataa_v1.mask_io import align_masks_to_canonical, load_mask_tube, save_mask_npz
 from scripts.dataa_v1.mask_processing import MaskProcessingConfig, process_masks
@@ -40,10 +41,17 @@ def _find_case(cases: list[Any], case_id: str) -> Any:
     raise DataAError(f"case_id not found in normalized plan: {case_id}")
 
 
+def _load_cases(plan: Path, track_bank: Optional[Path], path_mapping: Optional[Path]) -> list[Any]:
+    if track_bank is not None:
+        return load_cases_for_audit(plan, track_bank, path_mapping)
+    execution_plan = load_execution_plan(execution_plan_path=plan, track_bank_path=None, path_mapping_path=path_mapping)
+    return execution_plan.cases
+
+
 def package_case(
     *,
     plan: Path,
-    track_bank: Path,
+    track_bank: Optional[Path],
     case_id: str,
     out_dir: Path,
     path_mapping: Optional[Path] = None,
@@ -55,7 +63,7 @@ def package_case(
     ffmpeg_bin: str = "ffmpeg",
     ffprobe_bin: str = "ffprobe",
 ) -> dict[str, Any]:
-    cases = load_cases_for_audit(plan, track_bank, path_mapping)
+    cases = _load_cases(plan, track_bank, path_mapping)
     case = _find_case(cases, case_id)
     preflight = audit_case(case)
     attempt_dir = out_dir / case.case_id
@@ -70,7 +78,7 @@ def package_case(
             source_clip=str(attempt_dir / "source_clip.mp4"),
             mask_video=str(attempt_dir / "target_mask_gen.mp4"),
             prompt=prompts["model_prompt"],
-            output_dir=str(attempt_dir / "vace_output"),
+            output_dir=str(attempt_dir),
             donor_reference=str(attempt_dir / "donor_reference.png") if case.donor else None,
             dry_run=True,
         )
@@ -143,7 +151,9 @@ def package_case(
 
     donor_meta = None
     donor_reference_path = None
-    if case.donor and case.donor.path and case.donor.path.resolved_path:
+    if case.donor:
+        if not (case.donor.path and case.donor.path.resolved_path):
+            raise DataAError("blocked_donor_reference_failure: donor mask path is unresolved")
         donor_tube = load_mask_tube(Path(case.donor.path.resolved_path))
         if execute_media:
             if not case.donor.video_path:
@@ -153,8 +163,8 @@ def package_case(
             donor_meta = export_synthetic_donor_reference(attempt_dir, donor_tube)
         else:
             donor_meta = {
-            "status": "planned",
-            "note": "server execution will crop donor RGB; dry-run does not read donor video pixels",
+                "status": "planned",
+                "note": "server execution will crop donor RGB; dry-run does not read donor video pixels",
             }
         donor_reference_path = str(attempt_dir / "donor_reference.png")
 
@@ -177,7 +187,7 @@ def package_case(
         source_clip=source_clip["source_clip_path"],
         mask_video=str(mask_video_path),
         prompt=prompts["model_prompt"],
-        output_dir=str(attempt_dir / "vace_output"),
+        output_dir=str(attempt_dir),
         donor_reference=donor_reference_path,
         dry_run=dry_run,
     )
@@ -212,7 +222,7 @@ def package_case(
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", required=True, type=Path)
-    parser.add_argument("--track-bank", required=True, type=Path)
+    parser.add_argument("--track-bank", type=Path, default=None)
     parser.add_argument("--case-id", required=True)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--path-mapping", type=Path, default=None)

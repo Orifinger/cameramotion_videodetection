@@ -22,6 +22,7 @@ from scripts.dataa_v1.execution_plan import (
 )
 from scripts.dataa_v1.run_state import RunPaths, RunState
 from scripts.dataa_v1.runtime_preflight import check_runtime
+from scripts.dataa_v1.schema import serialize_case
 from scripts.dataa_v1.topology import build_topology, shard_cases, topology_payload, validate_topology_for_resume
 from scripts.dataa_v1.worker_commands import build_worker_command
 
@@ -94,6 +95,7 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
             case_ids = [case_id for case_id in case_ids if case_id == args.case_id]
         if args.max_cases is not None:
             case_ids = case_ids[: args.max_cases]
+        case_by_id = {case.case_id: case for case in plan.cases}
         shards = shard_cases(case_ids, run_id, topology)
         plan_report["shards"] = {str(worker_id): ids for worker_id, ids in shards.items()}
         paths.coordinator_dir.mkdir(parents=True, exist_ok=True)
@@ -102,20 +104,18 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 "run_id": run_id,
                 "worker_id": group.worker_id,
                 "topology": topology_payload(topology),
+                "execution_plan": str(execution_plan_path),
+                "track_bank": str(track_bank) if track_bank else None,
+                "path_mapping": str(path_mapping) if path_mapping else None,
+                "profile": str(config["vace"].get("profile", "production_720")),
+                "ffmpeg_bin": str(config["vace"].get("ffmpeg_bin", "ffmpeg")),
+                "ffprobe_bin": str(config["vace"].get("ffprobe_bin", "ffprobe")),
+                "vace_size": str(config["vace"].get("size") or ("480p" if config["vace"].get("profile") == "smoke_480" else "720p")),
                 "cases": [
                     {
                         "case_id": case_id,
-                        "vace_job": {
-                            "case_id": case_id,
-                            "source_clip": str(paths.attempt_dir(group.worker_id, case_id) / "source_clip.mp4"),
-                            "target_mask_gen_video": str(paths.attempt_dir(group.worker_id, case_id) / "target_mask_gen.mp4"),
-                            "model_prompt": "",
-                            "output_path": str(paths.attempt_dir(group.worker_id, case_id) / "generated_raw.mp4"),
-                            "donor_reference": None,
-                            "frame_count": 81,
-                            "size": "720p",
-                            "seed": int(config["vace"].get("seed", 20260629)),
-                        },
+                        "attempt_dir": str(paths.attempt_dir(group.worker_id, case_id)),
+                        "case": serialize_case(case_by_id[case_id], include_raw=True),
                     }
                     for case_id in shards[group.worker_id]
                 ],

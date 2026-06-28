@@ -18,7 +18,9 @@ def build_worker_command(
 ) -> Dict[str, Any]:
     argv = [
         torchrun_bin,
+        "--nnodes=1",
         f"--nproc_per_node={group.nproc_per_node}",
+        f"--master_port={29600 + group.worker_id}",
         "scripts/dataa_v1/vace_persistent_worker.py",
         "--config",
         str(config_path),

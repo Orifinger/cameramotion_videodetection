@@ -53,6 +53,8 @@ def validate_manifest_payload(manifest: Dict[str, Any]) -> List[str]:
         "blocked_clip_selection_failure",
         "blocked_mask_video_mismatch",
         "blocked_donor_reference_failure",
+        "blocked_vace_generation_failure",
+        "blocked_packaging_failure",
         "blocked_schema_error",
         "blocked_invalid_mask_npz",
         "blocked_mapped_but_unverified",
