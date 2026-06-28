@@ -14,6 +14,7 @@ from scripts.dataa_v1.mask_video import write_mask_video_ffmpeg
 from scripts.dataa_v1.oss_sync import mark_ready_to_upload, should_trigger_upload, upload_case_bundle
 from scripts.dataa_v1.qa import batch_summary, compare_video_metadata
 from scripts.dataa_v1.run_state import RunPaths, RunState
+from scripts.dataa_v1.run_vace14b_batch import _resolve_project_path
 from scripts.dataa_v1.topology import build_topology, shard_cases, stable_worker_id
 from scripts.dataa_v1.worker_commands import build_worker_command
 
@@ -72,6 +73,13 @@ def test_default_topology_4x4_and_fallback_2x8() -> None:
     assert fallback.name == "2x8"
     assert fallback.is_fallback
     assert fallback.groups[0].nproc_per_node == 8
+
+
+def test_project_relative_execution_plan_resolves_under_repo_res() -> None:
+    resolved = _resolve_project_path("res/dataA_v1/plans/frozen_full_vace_execution_plan.json")
+    assert resolved is not None
+    assert resolved.is_absolute()
+    assert resolved.as_posix().endswith("/res/dataA_v1/plans/frozen_full_vace_execution_plan.json")
 
 
 def test_deterministic_sharding_is_stable() -> None:

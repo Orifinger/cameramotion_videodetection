@@ -30,21 +30,29 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _resolve_project_path(path: Path | str | None) -> Path | None:
+    if path in (None, ""):
+        return None
+    value = Path(path)
+    return value if value.is_absolute() else _repo_root() / value
+
+
 def _default_run_id() -> str:
     return "dataa_v1_vace14b_full_" + utc_now_iso().replace(":", "").replace("-", "").split(".")[0]
 
 
 def _resolve_execution_plan(args: argparse.Namespace, config: Dict[str, Any], *, execute: bool) -> Path | None:
     path_value = args.execution_plan or config.get("execution", {}).get("full_execution_plan")
-    path = Path(path_value) if path_value else discover_full_execution_plan(_repo_root())
+    path = _resolve_project_path(path_value) if path_value else discover_full_execution_plan(_repo_root())
     if execute:
         return require_full_plan_for_execute(path)
     return path if path and path.is_file() else None
 
 
 def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
+    config_path = _resolve_project_path(args.config)
     config = apply_cli_overrides(
-        load_config(args.config),
+        load_config(config_path),
         execution_plan=args.execution_plan,
         checkpoint_dir=args.checkpoint_dir,
         run_id=args.run_id,
@@ -75,8 +83,8 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
         "shards": {},
     }
     if execution_plan_path:
-        track_bank = Path(args.track_bank) if args.track_bank else None
-        path_mapping = Path(args.path_mapping) if args.path_mapping else None
+        track_bank = _resolve_project_path(args.track_bank) if args.track_bank else None
+        path_mapping = _resolve_project_path(args.path_mapping) if args.path_mapping else None
         plan = load_execution_plan(execution_plan_path=execution_plan_path, track_bank_path=track_bank, path_mapping_path=path_mapping)
         plan_report["execution_plan_validation"] = plan.validation
         if not plan.validation["valid"] and config["execution"].get("strict", True):
@@ -117,7 +125,7 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
             plan_report["worker_commands"].append(
                 build_worker_command(
                     group=group,
-                    config_path=args.config,
+                    config_path=config_path,
                     shard_path=shard_path,
                     run_id=run_id,
                     torchrun_bin=str(config["vace"].get("torchrun_bin", "torchrun")),
