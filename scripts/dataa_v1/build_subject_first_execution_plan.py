@@ -234,6 +234,7 @@ def build_subject_first_plan(
     ffprobe_bin: str = "ffprobe",
     seed: int | None = None,
     dry_run: bool = False,
+    progress_every: int = 0,
     config_overrides: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     overrides: Dict[str, Any] = dict(config_overrides or {})
@@ -242,7 +243,7 @@ def build_subject_first_plan(
     config = load_selection_config(selection_config, overrides=overrides)
     records = load_track_bank_records(track_bank)
     resolver = PathResolver(read_json(path_mapping) if path_mapping else {})
-    evaluated = evaluate_tracks(records, config, ffprobe_bin=ffprobe_bin, path_resolver=resolver)
+    evaluated = evaluate_tracks(records, config, ffprobe_bin=ffprobe_bin, path_resolver=resolver, progress_every=progress_every)
     selections = select_subjects_by_video(evaluated, config)
     selected_by_video = {video_id: choice.selected for video_id, choice in selections.items() if choice.selected is not None}
 
@@ -363,6 +364,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--out-audit-csv", type=Path, default=DEFAULT_OUT_AUDIT_CSV)
     parser.add_argument("--out-plan", type=Path, default=DEFAULT_OUT_PLAN)
     parser.add_argument("--ffprobe-bin", default="ffprobe")
+    parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--primary-probability", type=float, default=None)
@@ -391,6 +393,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ffprobe_bin=args.ffprobe_bin,
             seed=args.seed,
             dry_run=bool(args.dry_run),
+            progress_every=max(0, int(args.progress_every)),
             config_overrides=_threshold_overrides(args),
         )
     except DataAError as exc:

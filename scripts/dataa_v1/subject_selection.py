@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
@@ -507,10 +508,18 @@ def evaluate_tracks(
     *,
     ffprobe_bin: str = "ffprobe",
     path_resolver: PathResolver | None = None,
+    progress_every: int = 0,
 ) -> list[EvaluatedTrack]:
     fps_resolver = VideoFpsResolver(ffprobe_bin=ffprobe_bin)
     resolver = path_resolver or PathResolver({})
-    return [evaluate_track(record, config, fps_resolver=fps_resolver, path_resolver=resolver) for record in records]
+    items = list(records)
+    total = len(items)
+    evaluated: list[EvaluatedTrack] = []
+    for index, record in enumerate(items, start=1):
+        evaluated.append(evaluate_track(record, config, fps_resolver=fps_resolver, path_resolver=resolver))
+        if progress_every > 0 and (index == 1 or index % progress_every == 0 or index == total):
+            print(f"subject_selection progress: evaluated {index}/{total} tracks", file=sys.stderr, flush=True)
+    return evaluated
 
 
 def _bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> tuple[float, float]:
