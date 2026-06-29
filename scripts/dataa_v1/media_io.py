@@ -144,10 +144,13 @@ def export_canonical_source_clip(
         "-y",
         "-ss",
         f"{start_time:.6f}",
-        "-i",
-        str(source_video),
+        # Input-side duration: keep the selected source interval bounded, but do
+        # not cap the filtered output. The latter must be allowed to reach
+        # `frame_count` after tpad clones the final source frame.
         "-t",
         f"{duration:.6f}",
+        "-i",
+        str(source_video),
         "-vf",
         scale,
         "-frames:v",
