@@ -1,0 +1,35 @@
+{
+  "random_seed": 20260629,
+  "primary_probability": 0.85,
+  "universal_gate": {
+    "min_contiguous_visible_seconds": 1.0,
+    "min_median_mask_area_ratio": 0.012,
+    "min_p20_mask_area_ratio": 0.006,
+    "min_median_bbox_short_side_720": 80
+  },
+  "secondary_gate": {
+    "min_median_mask_area_ratio": 0.020,
+    "min_p20_mask_area_ratio": 0.010,
+    "min_median_bbox_short_side_720": 112
+  },
+  "score_weights": {
+    "robust_area": 0.40,
+    "frame_centrality": 0.20,
+    "temporal_visibility": 0.20,
+    "track_quality": 0.15,
+    "semantic_compatibility": 0.05
+  },
+  "semantic_bonus": {
+    "human": 0.05,
+    "vehicle": 0.03,
+    "bounded_object": 0.02,
+    "display_screen": 0.01,
+    "sign_or_poster": 0.01,
+    "framed_art": 0.01,
+    "paper_book_map": 0.01
+  },
+  "secondary_dedupe": {
+    "median_bbox_iou_threshold": 0.70,
+    "median_bbox_containment_threshold": 0.80
+  }
+}

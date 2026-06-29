@@ -1,0 +1,47 @@
+run:
+  run_id: null
+  tmp_root: /tmp/cameramotion_det/dataA_v1/vace14b
+  oss_prefix: oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/dataA_v1/vace14b
+
+execution:
+  full_execution_plan: res/dataA_v1/plans/frozen_subject_first_vace_execution_plan.json
+  resume: true
+  strict: true
+  block_invalid_cases: true
+  allow_reshard: false
+
+vace:
+  repo_dir: third_party/VACE
+  checkpoint_dir: /home/admin/wan2.1-VACE
+  model_name: vace-14B
+  profile: production_720
+  size: 720p
+  seed: 20260629
+  ffmpeg_bin: /input/tmp/ffmpeg/ffmpeg-7.0.2-amd64-static/ffmpeg
+  ffprobe_bin: /input/tmp/ffmpeg/ffmpeg-7.0.2-amd64-static/ffprobe
+  torchrun_bin: torchrun
+  sample_solver: unipc
+  sample_steps: 50
+  sample_shift: 16
+  sample_guide_scale: 5.0
+  use_prompt_extend: plain
+  force_flash_attn_2: true
+
+gpu:
+  worker_groups: 4
+  gpus_per_worker: 4
+  fallback_topologies:
+    - worker_groups: 2
+      gpus_per_worker: 8
+  telemetry_interval_seconds: 10
+  min_aggregate_vram_ratio: 0.50
+  enforce_min_aggregate_vram_ratio: true
+
+upload:
+  enabled: true
+  upload_command: ossutil64
+  every_completed_cases: 8
+  every_minutes: 30
+  delete_local_after_verified_upload: true
+  tmp_free_space_watermark_gb: 500
+  retry_backoff_seconds: [30, 120, 300, 900]
