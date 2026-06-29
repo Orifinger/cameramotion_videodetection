@@ -20,6 +20,8 @@ if __package__ is None or __package__ == "":
 
 from scripts.dataa_v1.common import DataAError, read_json, write_json
 from scripts.dataa_v1.config import load_config
+from scripts.dataa_v1.full_video import reassemble_full_video_pair
+from scripts.dataa_v1.manifest import write_manifest
 from scripts.dataa_v1.media_io import crop_video_frames
 from scripts.dataa_v1.oss_sync import mark_ready_to_upload, upload_case_bundle
 from scripts.dataa_v1.package_vace_case import package_case
@@ -64,16 +66,35 @@ def _postprocess_from_manifest(manifest: Mapping[str, Any], *, attempt_dir: Path
         "pad_frame_count": pad_frame_count,
         "pad_mode": str(canonical.get("pad_mode") or "none"),
         "crop_after_generation": crop_after_generation,
-        "fps": int(canonical.get("fps") or 16),
+        "fps": float(canonical.get("generation_fps") or canonical.get("fps") or 16),
         "raw_output_path": str(attempt_dir / "generated_raw.mp4"),
         "trimmed_output_path": str(attempt_dir / "generated_trimmed.mp4"),
     }
+
+
+def _validate_model_plan(manifest: Mapping[str, Any], *, config: Mapping[str, Any], profile: str, size: str) -> None:
+    model_plan = ((manifest.get("sampling_meta") or {}).get("vace_model_plan") or {})
+    if not model_plan:
+        raise DataAError(f"blocked_model_plan_mismatch: missing sampling_meta.vace_model_plan for {manifest.get('case_id')}")
+    expected = {
+        "model_name": str(config.get("model_name") or ""),
+        "profile": str(profile),
+        "size": str(size),
+    }
+    actual = {
+        "model_name": str(model_plan.get("model_name") or ""),
+        "profile": str(model_plan.get("profile") or ""),
+        "size": str(model_plan.get("size") or ""),
+    }
+    if actual != expected:
+        raise DataAError(f"blocked_model_plan_mismatch: case={actual} worker={expected}")
 
 
 def _job_from_manifest(manifest: Mapping[str, Any], *, attempt_dir: Path, size: str, seed: int) -> VaceJob:
     source_clip = manifest.get("source_clip") or {}
     mask_video = manifest.get("mask_video") or {}
     prompt = manifest.get("prompt") or {}
+    canonical = source_clip.get("canonical") or {}
     target_mask = mask_video.get("target_mask_gen_video") or str(attempt_dir / "target_mask_gen.mp4")
     vace_input = (
         source_clip.get("vace_input_path")
@@ -93,6 +114,7 @@ def _job_from_manifest(manifest: Mapping[str, Any], *, attempt_dir: Path, size: 
         output_path=str(attempt_dir / "generated_raw.mp4"),
         donor_reference=donor_reference,
         frame_count=_frame_count_from_manifest(manifest),
+        output_fps=float(canonical.get("generation_fps") or canonical.get("fps") or 16),
         size=size,
         seed=seed,
     )
@@ -110,7 +132,7 @@ def _postprocess_generation(result: Dict[str, Any], postprocess: Mapping[str, An
         source_video=Path(str(result["output_path"])),
         out_path=Path(str(detail["trimmed_output_path"])),
         frame_count=int(detail["valid_frame_count"]),
-        fps=int(detail["fps"]),
+        fps=float(detail["fps"]),
         ffmpeg_bin=ffmpeg_bin,
     )
     detail["status"] = "cropped_to_valid_frames"
@@ -133,6 +155,8 @@ def run_worker(*, config_path: Path, shard_path: Path, worker_id: int, run_id: s
     config["vace"]["ring_size"] = int(group_cfg.get("ring_size", config["vace"].get("ring_size", 1)))
     config["vace"]["t5_fsdp"] = True
     config["vace"]["dit_fsdp"] = True
+    if bool(config["vace"].get("offload_model", False)) or bool(config["vace"].get("t5_cpu", False)):
+        raise DataAError("blocked_slow_memory_mode: offload_model and t5_cpu must both be false")
     runtime = PersistentVaceRuntime(config["vace"])
     runtime.initialize_once()
     paths = RunPaths.from_root(Path(config["run"]["tmp_root"]), run_id)
@@ -175,10 +199,11 @@ def run_worker(*, config_path: Path, shard_path: Path, worker_id: int, run_id: s
                         state.append_status(case_id, status, worker_id=worker_id, detail={"manifest": str(attempt_dir / "case_manifest.json")})
                         package_result = {"status": status, "case_id": case_id, "skip_generation": True}
                     else:
+                        _validate_model_plan(manifest, config=config["vace"], profile=profile, size=vace_size)
                         job = _job_from_manifest(manifest, attempt_dir=attempt_dir, size=vace_size, seed=seed)
                         postprocess = _postprocess_from_manifest(manifest, attempt_dir=attempt_dir)
                         state.append_status(case_id, "packed", worker_id=worker_id, detail={"manifest": str(attempt_dir / "case_manifest.json")})
-                        package_result = {"status": "packed", "case_id": case_id, "vace_job": job.__dict__, "postprocess": postprocess}
+                        package_result = {"status": "packed", "case_id": case_id, "vace_job": job.__dict__, "postprocess": postprocess, "manifest": manifest}
                 except DataAError as exc:
                     status = _status_from_error(exc)
                     state.append_status(case_id, status, worker_id=worker_id, detail={"error": str(exc)})
@@ -201,6 +226,18 @@ def run_worker(*, config_path: Path, shard_path: Path, worker_id: int, run_id: s
             attempt_dir = Path(job.output_path).parent
             try:
                 result = _postprocess_generation(result, descriptor.get("postprocess") or {}, ffmpeg_bin=ffmpeg_bin)
+                manifest_payload = descriptor.get("manifest") or read_json(attempt_dir / "case_manifest.json")
+                full_video = reassemble_full_video_pair(
+                    manifest=manifest_payload,
+                    attempt_dir=attempt_dir,
+                    generated_raw_video=Path(str(result["output_path"])),
+                    final_generated_video=Path(str(result["final_output_path"])),
+                    ffmpeg_bin=ffmpeg_bin,
+                    ffprobe_bin=ffprobe_bin,
+                )
+                result["full_video"] = full_video
+                manifest_payload["full_video"] = full_video
+                write_manifest(attempt_dir / "case_manifest.json", manifest_payload)
             except DataAError as exc:
                 state.append_status(job.case_id, "blocked_generation_postprocess_failure", worker_id=worker_id, detail={"error": str(exc)})
                 continue

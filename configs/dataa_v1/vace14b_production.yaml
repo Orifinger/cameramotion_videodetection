@@ -25,6 +25,8 @@ vace:
   sample_shift: 16
   sample_guide_scale: 5.0
   use_prompt_extend: plain
+  offload_model: false
+  t5_cpu: false
 
 gpu:
   # Default production topology: 4 persistent worker groups x 4 GPUs.

@@ -8,7 +8,7 @@ from scripts.dataa_v1.audit_vace_stage1 import build_report
 from scripts.dataa_v1.clip_selection import VaceProfile, select_clip
 from scripts.dataa_v1.donor_reference import choose_donor_frame
 from scripts.dataa_v1.mask_io import align_masks_to_canonical, load_mask_tube
-from scripts.dataa_v1.mask_processing import process_masks
+from scripts.dataa_v1.mask_processing import apply_effective_mask_policy, process_masks
 from scripts.dataa_v1.mask_video import validate_mask_video_roundtrip, write_mask_video
 from scripts.dataa_v1.package_vace_case import package_case
 from scripts.dataa_v1.path_resolver import PathResolver
@@ -36,6 +36,22 @@ def _plan_and_tracks(tmp_path: Path) -> tuple[Path, Path]:
                 "generator_route": "vace14b_masktrack_reference_swap",
                 "target_track_id": "target_track",
                 "donor_track_id": "donor_track",
+                "sampling_meta": {
+                    "mask_policy": {
+                        "variant_type": "sam3_shape",
+                        "seed": 1,
+                        "dilation_radius_px": 8,
+                        "bbox_expand_ratio": 1.15,
+                        "person_bbox_disabled": False,
+                    },
+                    "vace_model_plan": {
+                        "model_name": "vace-14B",
+                        "size": "720p",
+                        "profile": "production_720",
+                        "offload_model": False,
+                        "t5_cpu": False,
+                    },
+                },
             }
         ]
     }
@@ -95,11 +111,20 @@ def test_path_mapping_does_not_claim_tmp_persistence(tmp_path: Path) -> None:
 def test_clip_selection_and_mask_alignment(tmp_path: Path) -> None:
     tube = load_mask_tube(_tube(tmp_path / "tube.npz", np.arange(0, 180, dtype=np.int32)))
     clip = select_clip(tube, source_fps=30.0, profile=VaceProfile())
-    assert clip.duration_seconds == 5
+    assert clip.duration_seconds == 6
     assert clip.canonical_frame_count == 81
+    assert clip.canonical_fps == 13.5
     aligned, meta = align_masks_to_canonical(tube, clip.canonical_to_source_frames)
     assert aligned.shape == (81, 24, 32)
     assert meta["frame_mapping"][0]["source_frame_index"] == 0
+
+
+def test_gap_alignment_zero_fills_invisible_frames(tmp_path: Path) -> None:
+    tube = load_mask_tube(_tube(tmp_path / "gap.npz", np.array([0, 1, 2, 10, 11, 12], dtype=np.int32)))
+    clip = select_clip(tube, source_fps=6.0, profile=VaceProfile())
+    aligned, meta = align_masks_to_canonical(tube, clip.canonical_to_source_frames)
+    assert meta["zero_filled_gap_frame_count"] > 0
+    assert any(aligned[index].sum() == 0 for index in meta["zero_filled_gap_frames"])
 
 
 def test_mask_video_roundtrip_validation(tmp_path: Path) -> None:
@@ -111,6 +136,24 @@ def test_mask_video_roundtrip_validation(tmp_path: Path) -> None:
     assert report["status"] == "ok"
     assert report["thresholded_iou_min"] == 1.0
     assert report["backend"] in {"decoded_video", "synthetic_npz_sidecar"}
+
+
+def test_effective_mask_policy_is_frozen_and_can_expand_bbox(tmp_path: Path) -> None:
+    tube = load_mask_tube(_tube(tmp_path / "tube.npz", np.arange(0, 17, dtype=np.int32)))
+    masks, _params = process_masks(tube.masks)
+    effective, meta = apply_effective_mask_policy(
+        masks,
+        {
+            "variant_type": "expanded_bbox",
+            "seed": 7,
+            "dilation_radius_px": 8,
+            "bbox_expand_ratio": 1.25,
+            "person_bbox_disabled": False,
+        },
+    )
+    assert effective["M_gen"].shape == masks["M_gen"].shape
+    assert meta["mask_policy"]["variant_type"] == "expanded_bbox"
+    assert meta["effective_mask_area_stats"]["mean"] > meta["base_gen_area_stats"]["mean"]
 
 
 def test_donor_reference_scoring(tmp_path: Path) -> None:
@@ -135,5 +178,6 @@ def test_package_case_dry_run_manifest_complete(tmp_path: Path) -> None:
     assert manifest["stage_status"] == "planned"
     assert manifest["mask_video"]["roundtrip"]["status"] == "not_run_in_dry_run"
     assert "model_prompt" in manifest["prompt"]
+    assert manifest["sampling_meta"]["mask_policy"]["variant_type"] == "sam3_shape"
     assert (out_dir / "case_0001" / "case_manifest.json").is_file()
     assert (out_dir / "case_0001" / "vace_command.json").is_file()

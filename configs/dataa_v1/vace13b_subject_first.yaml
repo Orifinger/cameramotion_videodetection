@@ -1,10 +1,10 @@
 run:
   run_id: null
-  tmp_root: /tmp/cameramotion_det/dataA_v1/vace14b
-  oss_prefix: oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/dataA_v1/vace14b
+  tmp_root: /tmp/cameramotion_det/dataA_v1/vace13b
+  oss_prefix: oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/dataA_v1/vace13b
 
 execution:
-  full_execution_plan: res/dataA_v1/plans/frozen_subject_first_vace14b_execution_plan.json
+  full_execution_plan: res/dataA_v1/plans/frozen_subject_first_vace13b_execution_plan.json
   resume: true
   strict: true
   block_invalid_cases: true
@@ -12,10 +12,10 @@ execution:
 
 vace:
   repo_dir: third_party/VACE
-  checkpoint_dir: /home/admin/wan2.1-VACE
-  model_name: vace-14B
-  profile: production_720
-  size: 720p
+  checkpoint_dir: /home/admin/wan2.1-VACE-1.3B
+  model_name: vace-1.3B
+  profile: production_480
+  size: 480p
   seed: 20260629
   ffmpeg_bin: /input/tmp/ffmpeg/ffmpeg-7.0.2-amd64-static/ffmpeg
   ffprobe_bin: /input/tmp/ffmpeg/ffmpeg-7.0.2-amd64-static/ffprobe

@@ -14,7 +14,7 @@ from .mask_io import MaskTube
 @dataclass(frozen=True)
 class VaceProfile:
     name: str = "production_720"
-    fps: int = 16
+    fps: float = 16.0
     frame_options: tuple[int, ...] = (81, 65, 49)
     landscape_size: tuple[int, int] = (720, 1280)
     portrait_size: tuple[int, int] = (1280, 720)
@@ -27,6 +27,8 @@ class VaceProfile:
 def profile_from_name(name: str) -> VaceProfile:
     if name == "production_720":
         return VaceProfile()
+    if name == "production_480":
+        return VaceProfile(name="production_480", frame_options=(81, 65, 49), landscape_size=(480, 832), portrait_size=(832, 480))
     if name == "smoke_480":
         return VaceProfile(name="smoke_480", frame_options=(81, 65, 49), landscape_size=(480, 832), portrait_size=(832, 480))
     raise DataAError(f"unknown VACE profile: {name}")
@@ -37,7 +39,7 @@ class ClipSelection:
     source_start_frame: int
     source_end_frame: int
     duration_seconds: float
-    canonical_fps: int
+    canonical_fps: float
     canonical_frame_count: int
     source_fps: float
     canonical_to_source_frames: List[float]
@@ -87,95 +89,53 @@ def select_clip(
     if source_fps <= 0:
         raise DataAError(f"source_fps must be positive, got {source_fps}")
     profile = profile or VaceProfile()
-    lookup = {int(frame): pos for pos, frame in enumerate(tube.frame_indices)}
-    runs = sorted(contiguous_runs(tube.frame_indices, max_gap=max_gap), key=lambda item: (item[2], item[1] - item[0]), reverse=True)
-    if not runs:
+    if tube.frame_indices.size == 0:
         raise DataAError("blocked_low_visibility: no visible target frames")
-
-    candidates: List[tuple[float, Dict[str, Any]]] = []
-    frame_options = sorted(profile.frame_options, key=lambda frames: profile.seconds_by_frames.get(frames, 0), reverse=True)
-    for frame_count in frame_options:
-        seconds = profile.seconds_by_frames.get(frame_count)
-        if seconds is None:
-            continue
-        required_source_span = max(1, int(round(seconds * source_fps)))
-        for run_start, run_end, _count in runs:
-            if run_end - run_start + 1 < required_source_span:
-                continue
-            source_start = run_start
-            source_end = source_start + required_source_span - 1
-            if source_end > run_end:
-                continue
-            positions = [lookup[f] for f in range(source_start, source_end + 1) if f in lookup]
-            if len(positions) != required_source_span:
-                continue
-            score = float(seconds * 100.0 + _mask_area_score(tube.masks[positions]))
-            candidates.append(
-                (
-                    score,
-                    {
-                        "source_start_frame": source_start,
-                        "source_end_frame": source_end,
-                        "duration_seconds": seconds,
-                        "canonical_frame_count": frame_count,
-                        "valid_canonical_frame_count": frame_count,
-                        "pad_canonical_frames": 0,
-                        "pad_mode": "none",
-                        "padded_short_clip": False,
-                        "run_start_frame": run_start,
-                        "run_end_frame": run_end,
-                        "visible_source_frames": required_source_span,
-                        "max_gap": max_gap,
-                        "score": score,
-                        "hard_cut_check": "not_evaluated_in_synthetic_scaffold",
-                        "clip_policy": "full_visible_window",
-                    },
-                )
-            )
-        if candidates:
-            break
-
-    if not candidates:
-        min_source_span = max(1, int(round(min_padded_visible_seconds * source_fps)))
-        viable_runs = [run for run in runs if run[2] >= min_source_span]
-        if not viable_runs:
-            raise DataAError(
-                "blocked_low_visibility: "
-                f"no >={min_padded_visible_seconds:.2f} second visible window for padded VACE input"
-            )
-        run_start, run_end, run_count = viable_runs[0]
-        positions = [lookup[f] for f in range(run_start, run_end + 1) if f in lookup]
-        if len(positions) != run_count:
-            raise DataAError("blocked_low_visibility: visible run has missing frame indices")
-        valid_canonical_frames = max(1, int(round((run_count / source_fps) * profile.fps)))
-        padded_canonical_frames = next_4n_plus_1(valid_canonical_frames)
-        score = float(10.0 + _mask_area_score(tube.masks[positions]))
-        candidates.append(
-            (
-                score,
-                {
-                    "source_start_frame": run_start,
-                    "source_end_frame": run_end,
-                    "duration_seconds": float(run_count / source_fps),
-                    "canonical_frame_count": padded_canonical_frames,
-                    "valid_canonical_frame_count": valid_canonical_frames,
-                    "pad_canonical_frames": padded_canonical_frames - valid_canonical_frames,
-                    "pad_mode": "repeat_last_frame",
-                    "padded_short_clip": True,
-                    "run_start_frame": run_start,
-                    "run_end_frame": run_end,
-                    "visible_source_frames": run_count,
-                    "max_gap": max_gap,
-                    "score": score,
-                    "hard_cut_check": "not_evaluated_in_synthetic_scaffold",
-                    "clip_policy": "short_visible_segment_pad_to_nearest_4n_plus_1",
-                    "short_clip_min_visible_seconds": float(min_padded_visible_seconds),
-                    "short_clip_reason": "no 3-5 second fully visible window",
-                },
-            )
-        )
-
-    chosen = max(candidates, key=lambda item: item[0])[1]
+    source_start = int(tube.frame_indices[0])
+    source_end = int(tube.frame_indices[-1])
+    source_span = source_end - source_start + 1
+    if source_span <= 0:
+        raise DataAError("blocked_low_visibility: invalid visible target envelope")
+    source_duration = float(source_span / source_fps)
+    if source_duration <= 5.0:
+        valid_frames = max(1, int(round(source_duration * float(profile.fps))))
+        canonical_frames = next_4n_plus_1(valid_frames)
+        generation_fps = float(profile.fps)
+        clip_policy = "first_visible_to_last_visible_pad_to_nearest_4n_plus_1"
+        pad_mode = "repeat_last_frame" if canonical_frames > valid_frames else "none"
+    else:
+        canonical_frames = 81
+        valid_frames = 81
+        generation_fps = float(canonical_frames / source_duration)
+        clip_policy = "first_visible_to_last_visible_uniform_81"
+        pad_mode = "none"
+    runs = contiguous_runs(tube.frame_indices, max_gap=max_gap)
+    chosen = {
+        "source_start_frame": source_start,
+        "source_end_frame": source_end,
+        "source_start_time_sec": float(source_start / source_fps),
+        "source_end_time_sec": float((source_end + 1) / source_fps),
+        "duration_seconds": source_duration,
+        "canonical_frame_count": canonical_frames,
+        "valid_canonical_frame_count": valid_frames,
+        "pad_canonical_frames": canonical_frames - valid_frames,
+        "pad_mode": pad_mode,
+        "padded_short_clip": canonical_frames > valid_frames,
+        "visible_first_frame": source_start,
+        "visible_last_frame": source_end,
+        "visible_source_frames": int(tube.frame_indices.shape[0]),
+        "envelope_source_frames": int(source_span),
+        "visibility_gap_frame_count": int(source_span - tube.frame_indices.shape[0]),
+        "visible_runs": [
+            {"start_frame": int(run_start), "end_frame": int(run_end), "visible_frame_count": int(count)}
+            for run_start, run_end, count in runs
+        ],
+        "max_gap": max_gap,
+        "score": float(_mask_area_score(tube.masks)),
+        "hard_cut_check": "not_evaluated_in_synthetic_scaffold",
+        "clip_policy": clip_policy,
+        "generation_fps": generation_fps,
+    }
     source_start = int(chosen["source_start_frame"])
     source_end = int(chosen["source_end_frame"])
     canonical_frames = int(chosen["canonical_frame_count"])
@@ -200,7 +160,7 @@ def select_clip(
         source_start_frame=source_start,
         source_end_frame=source_end,
         duration_seconds=float(chosen["duration_seconds"]),
-        canonical_fps=profile.fps,
+        canonical_fps=float(chosen["generation_fps"]),
         canonical_frame_count=canonical_frames,
         source_fps=float(source_fps),
         canonical_to_source_frames=[float(v) for v in canonical_to_source],

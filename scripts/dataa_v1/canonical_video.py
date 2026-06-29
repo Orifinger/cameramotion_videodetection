@@ -27,9 +27,13 @@ def canonical_video_plan(attempt_dir: Path, clip: ClipSelection, profile: VacePr
             "start_frame": clip.source_start_frame,
             "end_frame": clip.source_end_frame,
             "source_fps": clip.source_fps,
+            "start_time_sec": float(clip.source_start_frame / clip.source_fps),
+            "end_time_sec": float((clip.source_end_frame + 1) / clip.source_fps),
+            "duration_seconds": float(clip.duration_seconds),
         },
         "canonical": {
-            "fps": clip.canonical_fps,
+            "fps": float(clip.canonical_fps),
+            "generation_fps": float(clip.canonical_fps),
             "frame_count": clip.canonical_frame_count,
             "valid_frame_count": valid_frame_count,
             "pad_frame_count": pad_frame_count,
@@ -39,6 +43,7 @@ def canonical_video_plan(attempt_dir: Path, clip: ClipSelection, profile: VacePr
             "height": height,
             "width": width,
             "profile": profile.name,
+            "source_duration_sec": float(clip.duration_seconds),
             "frame_mapping": [
                 {"canonical_frame": i, "source_frame_float": frame}
                 for i, frame in enumerate(clip.canonical_to_source_frames)
@@ -83,6 +88,6 @@ def export_canonical_videos(
         ffmpeg_bin=ffmpeg_bin,
     )
     meta = ffprobe_video(clip_path, ffprobe_bin=ffprobe_bin)
-    if meta.frame_count != clip.canonical_frame_count or round(meta.fps) != clip.canonical_fps or meta.height != height or meta.width != width:
+    if meta.frame_count != clip.canonical_frame_count or round(meta.fps, 6) != round(clip.canonical_fps, 6) or meta.height != height or meta.width != width:
         raise DataAError(f"canonical source_clip validation failed: {meta}")
     return {"source_real_raw": raw, "source_clip": canonical, "source_clip_meta": meta, "media_created": True}

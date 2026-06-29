@@ -14,7 +14,20 @@ import numpy as np
 from PIL import Image
 
 from .common import DataAError
-from .mask_io import load_mask_tube
+
+
+def _load_alpha_npz(path: Path) -> np.ndarray:
+    if not path.is_file():
+        raise DataAError(f"alpha npz does not exist: {path}")
+    with np.load(path, allow_pickle=False) as archive:
+        if "masks" not in archive:
+            raise DataAError("alpha npz must contain masks")
+        alpha = archive["masks"].astype(np.float32)
+    if alpha.ndim != 3:
+        raise DataAError(f"alpha masks must be [N,H,W], got {alpha.shape}")
+    if alpha.max(initial=0.0) > 1.0:
+        alpha = alpha / 255.0
+    return np.clip(alpha, 0.0, 1.0)
 
 
 def composite_arrays(real: np.ndarray, generated: np.ndarray, alpha: np.ndarray) -> np.ndarray:
@@ -65,8 +78,7 @@ def composite_videos(
     fps: int,
     ffmpeg_bin: str = "ffmpeg",
 ) -> Dict[str, Any]:
-    alpha_tube = load_mask_tube(alpha_npz)
-    alpha = alpha_tube.masks.astype(np.float32)
+    alpha = _load_alpha_npz(alpha_npz)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".composite_", dir=str(out_path.parent)) as temp_dir:
         temp = Path(temp_dir)

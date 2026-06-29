@@ -12,6 +12,7 @@ import tempfile
 from PIL import Image
 
 from .common import DataAError
+from .media_io import fps_arg
 
 
 def mask_frames_to_rgb(masks: np.ndarray) -> list[np.ndarray]:
@@ -29,7 +30,7 @@ def write_mask_video(
     path: Path,
     masks: np.ndarray,
     *,
-    fps: int,
+    fps: float,
     macro_block_size: int | None = 1,
     allow_synthetic_npz_fallback: bool = False,
 ) -> Dict[str, Any]:
@@ -40,7 +41,7 @@ def write_mask_video(
         backend = "imageio_ffmpeg"
     except Exception as exc:  # noqa: BLE001
         if allow_synthetic_npz_fallback:
-            np.savez_compressed(_fallback_path(path), masks=(masks > 0).astype(np.uint8), fps=np.array([fps], dtype=np.int32))
+            np.savez_compressed(_fallback_path(path), masks=(masks > 0).astype(np.uint8), fps=np.array([float(fps)], dtype=np.float32))
             return {
                 "path": str(path),
                 "sidecar_path": str(_fallback_path(path)),
@@ -55,7 +56,7 @@ def write_mask_video(
     return {"path": str(path), "backend": backend, "fps": fps, "frame_count": int(masks.shape[0]), "height": int(masks.shape[1]), "width": int(masks.shape[2])}
 
 
-def write_mask_video_ffmpeg(path: Path, masks: np.ndarray, *, fps: int, ffmpeg_bin: str = "ffmpeg") -> Dict[str, Any]:
+def write_mask_video_ffmpeg(path: Path, masks: np.ndarray, *, fps: float, ffmpeg_bin: str = "ffmpeg") -> Dict[str, Any]:
     """Write a formal VACE mask video with lossless RGB encoding.
 
     No fallback is allowed here. If ffmpeg is missing or the codec fails, the
@@ -71,11 +72,11 @@ def write_mask_video_ffmpeg(path: Path, masks: np.ndarray, *, fps: int, ffmpeg_b
             ffmpeg_bin,
             "-y",
             "-framerate",
-            str(fps),
+            fps_arg(fps),
             "-i",
             str(temp / "%06d.png"),
             "-r",
-            str(fps),
+            fps_arg(fps),
             "-fps_mode",
             "cfr",
             "-c:v",

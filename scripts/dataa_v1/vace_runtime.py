@@ -25,6 +25,7 @@ class VaceJob:
     output_path: str
     donor_reference: Optional[str] = None
     frame_count: int = 81
+    output_fps: float = 16.0
     size: str = "720p"
     seed: int = 20260629
 
@@ -93,6 +94,10 @@ class PersistentVaceRuntime:
         use_prompt_extend = self.config.get("use_prompt_extend", "plain")
         if use_prompt_extend not in (None, "", "plain"):
             raise DataAError("blocked_prompt_extend: Data A prompts are frozen; VACE prompt extension must stay plain")
+        if bool(self.config.get("offload_model", False)):
+            raise DataAError("blocked_slow_memory_mode: offload_model must be false for Data A production")
+        if bool(self.config.get("t5_cpu", False)):
+            raise DataAError("blocked_slow_memory_mode: t5_cpu must be false for Data A production")
 
         rank = int(os.getenv("RANK", "0"))
         world_size = int(os.getenv("WORLD_SIZE", "1"))
@@ -169,6 +174,8 @@ class PersistentVaceRuntime:
             raise DataAError(
                 f"blocked_vace_generation_failure: frame_count must be 4n+1 for {job.case_id}, got {job.frame_count}"
             )
+        if job.output_fps <= 0:
+            raise DataAError(f"blocked_vace_generation_failure: output_fps must be positive for {job.case_id}, got {job.output_fps}")
 
         refs = None if not job.donor_reference else [job.donor_reference]
         torch = self._torch
@@ -203,6 +210,7 @@ class PersistentVaceRuntime:
             "rank": self._rank,
             "world_size": self._world_size,
             "attention_backend": self._attention_backend,
+            "output_fps": float(job.output_fps),
             "completed_at_utc": utc_now_iso(),
         }
         if self._rank == 0:
@@ -210,7 +218,7 @@ class PersistentVaceRuntime:
             self._cache_video(
                 tensor=video[None],
                 save_file=job.output_path,
-                fps=self._cfg.sample_fps,
+                fps=float(job.output_fps),
                 nrow=1,
                 normalize=True,
                 value_range=(-1, 1),
@@ -225,6 +233,7 @@ def build_single_job_args(job: VaceJob, config: Mapping[str, Any]) -> Dict[str, 
         "model_name": config.get("model_name", "vace-14B"),
         "size": job.size,
         "frame_num": job.frame_count,
+        "output_fps": job.output_fps,
         "ckpt_dir": config.get("checkpoint_dir"),
         "offload_model": False,
         "ulysses_size": int(config.get("ulysses_size", 4)),

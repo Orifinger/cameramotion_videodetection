@@ -25,7 +25,7 @@ from scripts.dataa_v1.donor_reference import export_donor_reference_from_video, 
 from scripts.dataa_v1.execution_plan import load_execution_plan
 from scripts.dataa_v1.manifest import build_case_manifest, write_manifest
 from scripts.dataa_v1.mask_io import align_masks_to_canonical, load_mask_tube, save_mask_npz
-from scripts.dataa_v1.mask_processing import MaskProcessingConfig, process_masks
+from scripts.dataa_v1.mask_processing import MaskProcessingConfig, apply_effective_mask_policy, process_masks
 from scripts.dataa_v1.mask_video import validate_mask_video_roundtrip, write_mask_video, write_mask_video_ffmpeg
 from scripts.dataa_v1.media_io import ffprobe_video
 from scripts.dataa_v1.mask_visualization import planned_mask_visualizations
@@ -67,7 +67,7 @@ def _validate_vace_input_media(
     }
     shapes = {label: _video_shape(meta) for label, meta in metas.items()}
     signatures = {
-        label: (shape["frame_count"], shape["fps"], shape["height"], shape["width"])
+        label: (shape["frame_count"], round(float(shape["fps"]), 6), shape["height"], shape["width"])
         for label, shape in shapes.items()
     }
     if len(set(signatures.values())) != 1:
@@ -142,6 +142,12 @@ def package_case(
     if not target_path:
         raise DataAError("blocked_missing_mask: target resolved path is absent")
     target_tube = load_mask_tube(Path(target_path))
+    plan_model = (case.sampling_meta or {}).get("vace_model_plan") or {}
+    plan_profile = plan_model.get("profile")
+    if plan_profile and profile_name != str(plan_profile):
+        raise DataAError(
+            f"blocked_model_plan_mismatch: case requires profile={plan_profile}, package profile={profile_name}"
+        )
     profile = profile_from_name(profile_name)
     if execute_media:
         if not case.target.video_path:
@@ -153,13 +159,18 @@ def package_case(
     except DataAError as exc:
         raise DataAError(f"blocked_clip_selection_failure: {exc}") from exc
 
-    aligned_raw, alignment_meta = align_masks_to_canonical(target_tube, clip.canonical_to_source_frames)
-    masks, mask_params = process_masks(aligned_raw, MaskProcessingConfig())
+    aligned_raw, alignment_meta = align_masks_to_canonical(target_tube, clip.canonical_to_source_frames, zero_missing=True)
+    processing_config = MaskProcessingConfig()
+    masks, mask_params = process_masks(aligned_raw, processing_config)
     height, width = profile.landscape_size
     masks = {
         name: resize_masks_nearest(mask, height=height, width=width)
         for name, mask in masks.items()
+        if name != "M_alpha"
     }
+    mask_policy = (case.sampling_meta or {}).get("mask_policy")
+    masks, effective_params = apply_effective_mask_policy(masks, mask_policy, processing_config)
+    mask_params["effective_mask_policy"] = effective_params
     mask_params["canonical_resize"] = {
         "height": height,
         "width": width,
@@ -182,12 +193,12 @@ def package_case(
     roundtrip = {"status": "not_run_in_dry_run"}
     mask_video_write = {"status": "not_run_in_dry_run"}
     if execute_media:
-        mask_video_write = write_mask_video_ffmpeg(mask_video_path, masks["M_gen"], fps=profile.fps, ffmpeg_bin=ffmpeg_bin)
+        mask_video_write = write_mask_video_ffmpeg(mask_video_path, masks["M_gen"], fps=clip.canonical_fps, ffmpeg_bin=ffmpeg_bin)
         roundtrip = validate_mask_video_roundtrip(mask_video_path, masks["M_gen"], ffmpeg_bin=ffmpeg_bin)
         if roundtrip["status"] != "ok":
             raise DataAError("blocked_mask_video_mismatch")
     elif synthetic_media:
-        mask_video_write = write_mask_video(mask_video_path, masks["M_gen"], fps=profile.fps)
+        mask_video_write = write_mask_video(mask_video_path, masks["M_gen"], fps=clip.canonical_fps)
         roundtrip = validate_mask_video_roundtrip(mask_video_path, masks["M_gen"])
         if roundtrip["status"] != "ok":
             raise DataAError("blocked_mask_video_mismatch")
@@ -251,6 +262,8 @@ def package_case(
         donor_reference=donor_reference_path,
         dry_run=dry_run,
         frame_num=clip.canonical_frame_count,
+        size=str(plan_model.get("size") or ("480p" if profile.name in {"smoke_480", "production_480"} else "720p")),
+        model_name=str(plan_model.get("model_name") or "vace-14B"),
     )
     manifest = build_case_manifest(
         case_id=case.case_id,
@@ -260,7 +273,13 @@ def package_case(
         target=serialize_case(case)["target"],
         donor=serialize_case(case)["donor"],
         source_clip=source_clip,
-        canonical_vace_profile={"name": profile.name, "fps": profile.fps, "frame_options": list(profile.frame_options)},
+        canonical_vace_profile={
+            "name": profile.name,
+            "fps": float(clip.canonical_fps),
+            "source_duration_sec": float(clip.duration_seconds),
+            "frame_count": int(clip.canonical_frame_count),
+            "frame_options": list(profile.frame_options),
+        },
         mask_layers=mask_layers,
         mask_processing_parameters=mask_params,
         prompt=prompts,
@@ -273,6 +292,7 @@ def package_case(
         code_commit=None,
         vace_command=command,
         preflight=preflight,
+        sampling_meta=case.sampling_meta,
         generated_at_utc=utc_now_iso(),
     )
     write_json(attempt_dir / "vace_command.json", command)

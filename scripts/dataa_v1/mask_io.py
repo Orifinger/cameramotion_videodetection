@@ -107,23 +107,46 @@ def nearest_source_frame(source_frame: float, visible_frames: np.ndarray) -> int
 def align_masks_to_canonical(
     tube: MaskTube,
     canonical_to_source_frames: Iterable[float],
+    *,
+    zero_missing: bool = True,
 ) -> tuple[np.ndarray, Dict[str, Any]]:
     lookup = frame_lookup(tube)
     aligned = []
     mapping = []
+    zero_filled = []
     for canonical_index, source_frame in enumerate(canonical_to_source_frames):
-        nearest = nearest_source_frame(float(source_frame), tube.frame_indices)
-        if nearest not in lookup:
-            raise DataAError(f"nearest visible source frame missing from lookup: {nearest}")
-        aligned.append(lookup[nearest])
+        rounded = int(round(float(source_frame)))
+        if rounded in lookup:
+            aligned.append(lookup[rounded])
+            mask_source_frame = rounded
+            status = "visible"
+        elif zero_missing:
+            aligned.append(np.zeros((tube.height, tube.width), dtype=np.uint8))
+            mask_source_frame = None
+            status = "zero_filled_invisible_gap"
+            zero_filled.append(int(canonical_index))
+        else:
+            nearest = nearest_source_frame(float(source_frame), tube.frame_indices)
+            if nearest not in lookup:
+                raise DataAError(f"nearest visible source frame missing from lookup: {nearest}")
+            aligned.append(lookup[nearest])
+            mask_source_frame = nearest
+            status = "nearest_visible_fallback"
         mapping.append(
             {
                 "canonical_frame": int(canonical_index),
                 "source_frame_float": float(source_frame),
-                "source_frame_index": int(nearest),
+                "source_frame_index": int(rounded),
+                "mask_source_frame_index": None if mask_source_frame is None else int(mask_source_frame),
+                "mask_alignment_status": status,
             }
         )
-    return np.stack(aligned, axis=0).astype(np.uint8), {"frame_mapping": mapping}
+    return np.stack(aligned, axis=0).astype(np.uint8), {
+        "frame_mapping": mapping,
+        "zero_missing": bool(zero_missing),
+        "zero_filled_gap_frames": zero_filled,
+        "zero_filled_gap_frame_count": int(len(zero_filled)),
+    }
 
 
 def save_mask_npz(path: Path, masks: np.ndarray, *, frame_indices: np.ndarray | None = None, kind: str = "mask") -> None:
@@ -133,4 +156,3 @@ def save_mask_npz(path: Path, masks: np.ndarray, *, frame_indices: np.ndarray | 
     if frame_indices is None:
         frame_indices = np.arange(masks.shape[0], dtype=np.int32)
     np.savez_compressed(path, frame_indices=frame_indices.astype(np.int32), masks=masks)
-

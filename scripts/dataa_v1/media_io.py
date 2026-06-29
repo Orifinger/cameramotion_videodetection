@@ -23,6 +23,10 @@ class VideoMeta:
     codec_name: Optional[str] = None
 
 
+def fps_arg(fps: float | int) -> str:
+    return f"{float(fps):.8f}".rstrip("0").rstrip(".")
+
+
 def _parse_rate(value: str) -> float:
     if "/" in value:
         num, den = value.split("/", 1)
@@ -123,7 +127,7 @@ def export_canonical_source_clip(
     start_frame: int,
     end_frame: int,
     source_fps: float,
-    canonical_fps: int,
+    canonical_fps: float,
     frame_count: int,
     height: int,
     width: int,
@@ -135,7 +139,7 @@ def export_canonical_source_clip(
     duration = (end_frame - start_frame + 1) / source_fps
     scale = (
         f"scale={width}:{height}:flags=lanczos,"
-        f"fps={canonical_fps},"
+        f"fps={fps_arg(canonical_fps)},"
         "tpad=stop_mode=clone:stop_duration=60,"
         f"trim=end_frame={frame_count},setpts=PTS-STARTPTS"
     )
@@ -156,7 +160,7 @@ def export_canonical_source_clip(
         "-frames:v",
         str(frame_count),
         "-r",
-        str(canonical_fps),
+        fps_arg(canonical_fps),
         "-fps_mode",
         "cfr",
         "-an",
@@ -177,7 +181,7 @@ def crop_video_frames(
     source_video: Path,
     out_path: Path,
     frame_count: int,
-    fps: int,
+    fps: float,
     ffmpeg_bin: str = "ffmpeg",
 ) -> Dict[str, Any]:
     if frame_count <= 0:
@@ -193,7 +197,7 @@ def crop_video_frames(
         "-frames:v",
         str(frame_count),
         "-r",
-        str(fps),
+        fps_arg(fps),
         "-fps_mode",
         "cfr",
         "-an",
@@ -206,7 +210,7 @@ def crop_video_frames(
     proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
     if proc.returncode != 0:
         raise DataAError(f"ffmpeg video crop failed: {proc.stderr.strip()}")
-    return {"path": str(out_path), "command": cmd, "frame_count": frame_count, "fps": fps}
+    return {"path": str(out_path), "command": cmd, "frame_count": frame_count, "fps": float(fps)}
 
 
 def assert_video_compatible(a: VideoMeta, b: VideoMeta) -> None:

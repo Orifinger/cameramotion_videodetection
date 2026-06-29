@@ -41,9 +41,12 @@ def build_prompts(case: CanonicalCaseSpec) -> Dict[str, str]:
     else:
         model = f"The masked local region around {target_name}{context} is edited coherently while the rest of the video remains unchanged."
 
+    artifact_policy = case.sampling_meta.get("artifact_policy") or {}
+    if artifact_policy.get("artifact_type") == "surface_text_degradation":
+        model += " Text or fine markings inside the masked surface appear degraded, distorted, partially garbled, blurred, or visibly compressed while the surrounding scene remains coherent."
+
     control = (
         "Edit only the target mask tube and a reasonable boundary band. Preserve background, camera motion, pose, scene geometry, "
         "lighting, all non-edit regions, and temporal continuity. Donor RGB is reference-only and must not be copied into target compositing."
     )
     return {"model_prompt": model, "control_prompt": control}
-

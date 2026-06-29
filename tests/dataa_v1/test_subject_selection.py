@@ -191,6 +191,8 @@ def test_subject_first_plan_loads_and_validates(tmp_path: Path) -> None:
     plan = load_execution_plan(execution_plan_path=out_plan, track_bank_path=None, path_mapping_path=None)
     assert plan.validation["valid"]
     assert plan.cases[0].sampling_meta["target_selection"]["selection_role"] in {"fallback_primary", "primary_subject"}
+    assert plan.cases[0].sampling_meta["mask_policy"]["variant_type"] in {"sam3_shape", "dilated", "expanded_bbox"}
+    assert plan.cases[0].sampling_meta["vace_model_plan"]["model_name"] == "vace-14B"
 
 
 def test_subject_first_writes_coverage_and_reserve_plans(tmp_path: Path) -> None:
@@ -251,14 +253,57 @@ def test_subject_first_writes_coverage_and_reserve_plans(tmp_path: Path) -> None
     clean_payload = load_execution_plan(execution_plan_path=out_plan, track_bank_path=None, path_mapping_path=None)
     coverage_payload = load_execution_plan(execution_plan_path=out_coverage, track_bank_path=None, path_mapping_path=None)
     reserve_payload = load_execution_plan(execution_plan_path=out_reserve, track_bank_path=None, path_mapping_path=None)
-    assert [case.case_id for case in clean_payload.cases] == ["case_clean"]
-    assert {case.case_id for case in reserve_payload.cases} == {case.case_id for case in coverage_payload.cases} - {"case_clean"}
+    assert {case.case_id for case in clean_payload.cases} == {"case_clean", "case_relaxed", "case_repair"}
+    assert {case.case_id for case in reserve_payload.cases} == {case.case_id for case in coverage_payload.cases} - {case.case_id for case in clean_payload.cases}
     repaired = next(case for case in coverage_payload.cases if case.case_id == "case_repair")
     assert repaired.donor is not None
     assert repaired.donor.video_id == "donor_video"
     relaxed_case = next(case for case in coverage_payload.cases if case.case_id == "case_relaxed")
-    assert relaxed_case.sampling_meta["target_selection"]["quality_tier"] == "relaxed_rescue"
+    assert relaxed_case.sampling_meta["target_selection"]["quality_tier"] == "area_gate_fallback_largest"
+    assert relaxed_case.sampling_meta["mask_policy"]["variant_type"] in {"sam3_shape", "dilated", "expanded_bbox"}
     assert any(case.case_id.startswith("dataA_v1_subject_first_coverage_") for case in coverage_payload.cases)
+
+
+def test_operation_fallback_does_not_keep_object_swap_on_person(tmp_path: Path) -> None:
+    person = _track(tmp_path, video_id="v1", track_id="person", box=(20, 20, 40, 50), candidate_class="human")
+    donor = _track(tmp_path, video_id="donor", track_id="donor_person", box=(20, 20, 40, 50), candidate_class="human")
+    track_bank = tmp_path / "tracks.json"
+    base_plan = tmp_path / "base_plan.json"
+    out_plan = tmp_path / "plan.json"
+    write_json(track_bank, {"tracks": [person, donor]})
+    write_json(
+        base_plan,
+        {
+            "cases": [
+                {
+                    "case_id": "case_repair_person",
+                    "operation": "object_swap",
+                    "generator_route": "vace14b_masktrack_reference_swap",
+                    "target_track_id": "person",
+                    "donor_track_id": "donor_person",
+                }
+            ]
+        },
+    )
+    summary = build_subject_first_plan(
+        track_bank=track_bank,
+        selection_config=None,
+        base_plan=base_plan,
+        out_catalog=tmp_path / "catalog.json",
+        out_audit_json=tmp_path / "audit.json",
+        out_audit_csv=tmp_path / "audit.csv",
+        out_plan=out_plan,
+        out_coverage_plan=tmp_path / "coverage.json",
+        out_reserve_plan=tmp_path / "reserve.json",
+        num_workers=1,
+    )
+    assert summary["validation"]["valid"]
+    plan = load_execution_plan(execution_plan_path=out_plan, track_bank_path=None, path_mapping_path=None)
+    case = plan.cases[0]
+    assert case.operation == "person_appearance_swap"
+    assert case.generator_route == "vace14b_masktrack_reference_swap"
+    assert case.sampling_meta["operation_repair"]["original_operation"] == "object_swap"
+    assert case.sampling_meta["mask_policy"]["person_bbox_disabled"] is True
 
 
 def test_subject_first_dry_run_writes_audit_not_plan(tmp_path: Path) -> None:

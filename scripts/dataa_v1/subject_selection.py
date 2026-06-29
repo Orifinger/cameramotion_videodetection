@@ -25,7 +25,7 @@ from .schema import MASK_PATH_KEYS, TRACK_LIST_KEYS, as_records, first_value
 
 DEFAULT_SUBJECT_SELECTION_CONFIG: Dict[str, Any] = {
     "random_seed": 20260629,
-    "primary_probability": 0.85,
+    "primary_probability": 0.90,
     "universal_gate": {
         "min_contiguous_visible_seconds": 1.0,
         "min_median_mask_area_ratio": 0.012,
@@ -36,6 +36,33 @@ DEFAULT_SUBJECT_SELECTION_CONFIG: Dict[str, Any] = {
         "min_median_mask_area_ratio": 0.020,
         "min_p20_mask_area_ratio": 0.010,
         "min_median_bbox_short_side_720": 112,
+    },
+    "operation_gates": {
+        "object_swap": {
+            "min_median_mask_area_ratio": 0.025,
+            "min_p20_mask_area_ratio": 0.012,
+            "min_median_bbox_short_side_720": 112,
+        },
+        "person_appearance_swap": {
+            "min_median_mask_area_ratio": 0.025,
+            "min_p20_mask_area_ratio": 0.012,
+            "min_median_bbox_short_side_720": 112,
+        },
+        "object_attribute_edit": {
+            "min_median_mask_area_ratio": 0.020,
+            "min_p20_mask_area_ratio": 0.010,
+            "min_median_bbox_short_side_720": 96,
+        },
+        "surface_content_edit": {
+            "min_median_mask_area_ratio": 0.012,
+            "min_p20_mask_area_ratio": 0.006,
+            "min_median_bbox_short_side_720": 80,
+        },
+        "surface_attribute_edit": {
+            "min_median_mask_area_ratio": 0.012,
+            "min_p20_mask_area_ratio": 0.006,
+            "min_median_bbox_short_side_720": 80,
+        },
     },
     "score_weights": {
         "robust_area": 0.40,
