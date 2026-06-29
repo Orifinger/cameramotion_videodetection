@@ -56,6 +56,13 @@ def _track_payload(record: Mapping[str, Any]) -> Dict[str, Any]:
         "source_video_path",
         "mask_tube_path",
         "mask_path",
+        "mask_npz_path",
+        "mask_tube_npz_path",
+        "sam3_mask_path",
+        "sam3_mask_npz_path",
+        "track_mask_path",
+        "track_mask_npz_path",
+        "npz_path",
         "candidate_class",
         "canonical_concept",
         "display_phrase",
@@ -109,10 +116,26 @@ def _quantiles(values: list[float]) -> Dict[str, float]:
     return {"p20": float(np.quantile(arr, 0.20)), "median": float(np.median(arr)), "p80": float(np.quantile(arr, 0.80))}
 
 
+def _reason_category(reason: str) -> str:
+    if "mask npz does not exist:" in reason:
+        return "mask_npz_does_not_exist"
+    if "; path=" in reason:
+        return reason.split("; path=", 1)[0]
+    if " -> " in reason:
+        return reason.split("=", 1)[0] + " -> " + reason.split(" -> ", 1)[1].split(":", 1)[0]
+    return reason
+
+
 def _summary(audit_records: list[Dict[str, Any]], plan_cases: list[Dict[str, Any]]) -> Dict[str, Any]:
     selected = [row for row in audit_records if row["selection_status"] == "selected"]
     videos = {row["video_id"] for row in audit_records}
     videos_with_primary = {row["video_id"] for row in audit_records if row["selection_status"] in {"selected", "primary_subject"}}
+    rejection_tags = Counter(tag for row in audit_records for tag in (row.get("rejection_tags") or []))
+    rejection_reasons = Counter(
+        _reason_category(str(reason))
+        for row in audit_records
+        for reason in (row.get("rejection_reasons") or [])
+    )
     return {
         "videos_total": len(videos),
         "videos_with_primary": len(videos_with_primary),
@@ -123,6 +146,8 @@ def _summary(audit_records: list[Dict[str, Any]], plan_cases: list[Dict[str, Any
         "selection_role_counts": dict(Counter(str(row.get("selection_role") or "<none>") for row in selected)),
         "candidate_class_counts_before_selection": dict(Counter(str(row.get("candidate_class") or "<missing>") for row in audit_records)),
         "candidate_class_counts_after_selection": dict(Counter(str(row.get("candidate_class") or "<missing>") for row in selected)),
+        "rejection_tag_counts": dict(rejection_tags.most_common(20)),
+        "rejection_reason_counts": dict(rejection_reasons.most_common(20)),
         "area_ratio_quantiles_before_selection": _quantiles([float(row["median_mask_area_ratio"]) for row in audit_records]),
         "area_ratio_quantiles_after_selection": _quantiles([float(row["median_mask_area_ratio"]) for row in selected]),
         "operation_counts": dict(Counter(str(case.get("operation") or "<missing>") for case in plan_cases)),
@@ -148,6 +173,7 @@ def _write_audit_csv(path: Path, rows: list[Dict[str, Any]]) -> None:
         "track_quality",
         "secondary_pool_size",
         "rejection_tags",
+        "rejection_reasons",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -155,6 +181,7 @@ def _write_audit_csv(path: Path, rows: list[Dict[str, Any]]) -> None:
         for row in rows:
             clean = dict(row)
             clean["rejection_tags"] = ";".join(row.get("rejection_tags") or [])
+            clean["rejection_reasons"] = ";".join(row.get("rejection_reasons") or [])
             writer.writerow({field: clean.get(field) for field in fields})
 
 
@@ -199,6 +226,7 @@ def build_subject_first_plan(
     track_bank: Path,
     selection_config: Path | None,
     base_plan: Path | None,
+    path_mapping: Path | None = None,
     out_catalog: Path,
     out_audit_json: Path,
     out_audit_csv: Path,
@@ -213,7 +241,8 @@ def build_subject_first_plan(
         overrides["random_seed"] = int(seed)
     config = load_selection_config(selection_config, overrides=overrides)
     records = load_track_bank_records(track_bank)
-    evaluated = evaluate_tracks(records, config, ffprobe_bin=ffprobe_bin)
+    resolver = PathResolver(read_json(path_mapping) if path_mapping else {})
+    evaluated = evaluate_tracks(records, config, ffprobe_bin=ffprobe_bin, path_resolver=resolver)
     selections = select_subjects_by_video(evaluated, config)
     selected_by_video = {video_id: choice.selected for video_id, choice in selections.items() if choice.selected is not None}
 
@@ -222,7 +251,7 @@ def build_subject_first_plan(
     skipped_templates: list[Dict[str, Any]] = []
     if base_plan is not None:
         track_index = build_track_index({"tracks": records})
-        base_cases = normalize_cases(read_json(base_plan), track_index, PathResolver({}), str(base_plan))
+        base_cases = normalize_cases(read_json(base_plan), track_index, resolver, str(base_plan))
         used_videos: set[str] = set()
         for case in base_cases:
             video_id = case.target.video_id
@@ -243,7 +272,7 @@ def build_subject_first_plan(
         for index, selected in enumerate(sorted(selected_by_video.values(), key=lambda item: item.video_id)):
             plan_cases.append(_minimal_case(index, selected, config))
 
-    normalized_plan_cases = normalize_cases({"cases": plan_cases}, build_track_index({"tracks": records}), PathResolver({}), str(out_plan))
+    normalized_plan_cases = normalize_cases({"cases": plan_cases}, build_track_index({"tracks": records}), resolver, str(out_plan))
     validation = validate_execution_cases(normalized_plan_cases)
     summary = _summary(audit_rows, plan_cases)
     catalog = {
@@ -251,6 +280,7 @@ def build_subject_first_plan(
         "generated_at_utc": utc_now_iso(),
         "track_bank": str(track_bank),
         "base_plan": str(base_plan) if base_plan else None,
+        "path_mapping": str(path_mapping) if path_mapping else None,
         "selection_config": config,
         "selected_targets": [audit_record(item) for item in selected_by_video.values()],
         "skipped_templates": skipped_templates,
@@ -261,6 +291,7 @@ def build_subject_first_plan(
         "generated_at_utc": utc_now_iso(),
         "track_bank": str(track_bank),
         "base_plan": str(base_plan) if base_plan else None,
+        "path_mapping": str(path_mapping) if path_mapping else None,
         "summary": summary,
         "candidates": audit_rows,
     }
@@ -269,6 +300,7 @@ def build_subject_first_plan(
         "generated_at_utc": utc_now_iso(),
         "track_bank": str(track_bank),
         "base_plan": str(base_plan) if base_plan else None,
+        "path_mapping": str(path_mapping) if path_mapping else None,
         "case_count": len(plan_cases),
         "selection_summary": summary,
         "validation": validation,
@@ -324,6 +356,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--track-bank", required=True, type=Path)
     parser.add_argument("--base-plan", type=Path, default=None)
+    parser.add_argument("--path-mapping", type=Path, default=None)
     parser.add_argument("--selection-config", type=Path, default=Path("configs/dataa_v1/subject_selection_v1.json"))
     parser.add_argument("--out-catalog", type=Path, default=DEFAULT_OUT_CATALOG)
     parser.add_argument("--out-audit-json", type=Path, default=DEFAULT_OUT_AUDIT_JSON)
@@ -350,6 +383,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             track_bank=_resolve_project_path(args.track_bank) or args.track_bank,
             selection_config=_resolve_project_path(args.selection_config),
             base_plan=_resolve_project_path(args.base_plan),
+            path_mapping=_resolve_project_path(args.path_mapping),
             out_catalog=_resolve_project_path(args.out_catalog) or args.out_catalog,
             out_audit_json=_resolve_project_path(args.out_audit_json) or args.out_audit_json,
             out_audit_csv=_resolve_project_path(args.out_audit_csv) or args.out_audit_csv,
@@ -371,7 +405,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"valid={summary['validation']['valid']}"
     )
     if not summary["validation"]["valid"]:
+        rejection_tags = summary["summary"].get("rejection_tag_counts") or {}
+        rejection_reasons = summary["summary"].get("rejection_reason_counts") or {}
         print(f"validation_errors={summary['validation']['errors']}", file=sys.stderr)
+        if rejection_tags:
+            print(f"top_rejection_tags={rejection_tags}", file=sys.stderr)
+        if rejection_reasons:
+            print(f"top_rejection_reasons={rejection_reasons}", file=sys.stderr)
         return 1
     return 0
 

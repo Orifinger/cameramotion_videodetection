@@ -17,6 +17,7 @@ import numpy as np
 from .common import DataAError, read_json
 from .mask_io import MaskTube, load_mask_tube
 from .media_io import ffprobe_video
+from .path_resolver import PathResolver
 from .schema import MASK_PATH_KEYS, TRACK_LIST_KEYS, as_records, first_value
 
 
@@ -55,6 +56,25 @@ DEFAULT_SUBJECT_SELECTION_CONFIG: Dict[str, Any] = {
         "median_bbox_containment_threshold": 0.80,
     },
 }
+
+SUBJECT_MASK_PATH_KEYS = tuple(
+    dict.fromkeys(
+        (
+            *MASK_PATH_KEYS,
+            "mask_npz_path",
+            "mask_tube_npz_path",
+            "mask_tube_npz",
+            "sam3_mask_path",
+            "sam3_mask_npz_path",
+            "track_mask_path",
+            "track_mask_npz_path",
+            "track_mask_npz",
+            "npz_path",
+        )
+    )
+)
+NESTED_MASK_CONTAINERS = ("mask", "mask_tube", "sam3", "sam3_mask", "track_mask")
+NESTED_MASK_PATH_KEYS = ("path", "local_path", "npz_path", "file", *SUBJECT_MASK_PATH_KEYS)
 
 
 def _merge_config(base: Mapping[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
@@ -102,6 +122,7 @@ class EvaluatedTrack:
     eligible_universal: bool
     eligible_secondary_gate: bool
     rejection_tags: list[str]
+    rejection_reasons: list[str] = field(default_factory=list)
     selection_status: str = "not_selected"
     selection_role: Optional[str] = None
     selection_mode: Optional[str] = None
@@ -127,6 +148,14 @@ def _optional_str(value: Any) -> Optional[str]:
     return None if value in (None, "") else str(value)
 
 
+def _optional_path_str(value: Any) -> Optional[str]:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
 def _required_str(record: Mapping[str, Any], key: str, *, fallback: str | None = None) -> str:
     value = _optional_str(record.get(key))
     if value:
@@ -134,6 +163,76 @@ def _required_str(record: Mapping[str, Any], key: str, *, fallback: str | None =
     if fallback is not None:
         return fallback
     raise DataAError(f"track record missing required field: {key}")
+
+
+def _mask_path_candidates(record: Mapping[str, Any]) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(label: str, value: Any) -> None:
+        path = _optional_path_str(value)
+        if not path or path in seen:
+            return
+        seen.add(path)
+        candidates.append((label, path))
+
+    for key in SUBJECT_MASK_PATH_KEYS:
+        add(key, record.get(key))
+
+    for container_key in NESTED_MASK_CONTAINERS:
+        nested = record.get(container_key)
+        if not isinstance(nested, Mapping):
+            continue
+        for key in NESTED_MASK_PATH_KEYS:
+            add(f"{container_key}.{key}", nested.get(key))
+    return candidates
+
+
+def _mask_load_error_tag(exc: Exception) -> str:
+    message = str(exc)
+    if "does not exist" in message:
+        return "invalid_mask_tube:mask_npz_does_not_exist"
+    if "must contain frame_indices and masks" in message:
+        return "invalid_mask_tube:npz_missing_frame_indices_or_masks"
+    if "frame_indices must be int32" in message:
+        return "invalid_mask_tube:frame_indices_not_int32"
+    if "frame_indices must be 1D" in message:
+        return "invalid_mask_tube:frame_indices_not_1d"
+    if "masks must have [N,H,W]" in message:
+        return "invalid_mask_tube:masks_not_nhw"
+    if "masks must be uint8" in message:
+        return "invalid_mask_tube:masks_not_uint8"
+    if "different N" in message:
+        return "invalid_mask_tube:frame_mask_count_mismatch"
+    if "empty mask tube" in message:
+        return "invalid_mask_tube:empty_mask_tube"
+    if "not strictly increasing" in message:
+        return "invalid_mask_tube:frame_indices_not_strictly_increasing"
+    return f"invalid_mask_tube:{type(exc).__name__}"
+
+
+def _blocked_track(
+    raw: Dict[str, Any],
+    video_id: str,
+    track_id: str,
+    candidate_class: Optional[str],
+    canonical_concept: Optional[str],
+    tags: list[str],
+    reasons: list[str] | None = None,
+) -> EvaluatedTrack:
+    return EvaluatedTrack(
+        record=raw,
+        video_id=video_id,
+        track_id=track_id,
+        candidate_class=candidate_class,
+        canonical_concept=canonical_concept,
+        metrics=None,
+        eligible_universal=False,
+        eligible_secondary_gate=False,
+        rejection_tags=tags,
+        rejection_reasons=reasons or [],
+        selection_status="ineligible_small_or_weak",
+    )
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -274,7 +373,13 @@ class VideoFpsResolver:
         return fps, None
 
 
-def evaluate_track(record: Mapping[str, Any], config: Mapping[str, Any], *, fps_resolver: VideoFpsResolver) -> EvaluatedTrack:
+def evaluate_track(
+    record: Mapping[str, Any],
+    config: Mapping[str, Any],
+    *,
+    fps_resolver: VideoFpsResolver,
+    path_resolver: PathResolver | None = None,
+) -> EvaluatedTrack:
     raw = dict(record)
     video_id = _required_str(raw, "video_id", fallback=_optional_str(raw.get("source_video_id")))
     track_id = _required_str(raw, "track_id", fallback=_optional_str(raw.get("candidate_id")))
@@ -282,16 +387,55 @@ def evaluate_track(record: Mapping[str, Any], config: Mapping[str, Any], *, fps_
     canonical_concept = _optional_str(raw.get("canonical_concept"))
     rejection_tags: list[str] = []
 
-    mask_path = _optional_str(first_value(raw, MASK_PATH_KEYS))
+    resolver = path_resolver or PathResolver({})
+    mask_candidates = _mask_path_candidates(raw)
+    if not mask_candidates:
+        return _blocked_track(
+            raw,
+            video_id,
+            track_id,
+            candidate_class,
+            canonical_concept,
+            ["missing_mask_tube_path"],
+            [f"no string mask path field found; checked={','.join(SUBJECT_MASK_PATH_KEYS)}"],
+        )
+    mask_path: str | None = None
+    mask_path_reasons: list[str] = []
+    for key, candidate_path in mask_candidates:
+        resolved = resolver.resolve(candidate_path)
+        if resolved.state in {"readable_persistent", "readable_volatile"} and resolved.resolved_path:
+            mask_path = resolved.resolved_path
+            raw["mask_tube_path"] = candidate_path
+            raw["subject_selection_mask_path_key"] = key
+            raw["subject_selection_resolved_mask_path"] = resolved.resolved_path
+            raw["subject_selection_mask_path_state"] = resolved.state
+            break
+        mask_path_reasons.append(f"{key}={candidate_path} -> {resolved.state}: {resolved.note}")
     if not mask_path:
-        return EvaluatedTrack(raw, video_id, track_id, candidate_class, canonical_concept, None, False, False, ["missing_mask_tube_path"])
+        return _blocked_track(
+            raw,
+            video_id,
+            track_id,
+            candidate_class,
+            canonical_concept,
+            ["mask_tube_path_unreadable"],
+            mask_path_reasons,
+        )
     fps, fps_error = fps_resolver.resolve(raw)
     if fps_error or fps is None or fps <= 0:
-        return EvaluatedTrack(raw, video_id, track_id, candidate_class, canonical_concept, None, False, False, [fps_error or "source_fps_unavailable"])
+        return _blocked_track(raw, video_id, track_id, candidate_class, canonical_concept, [fps_error or "source_fps_unavailable"])
     try:
         tube = load_mask_tube(Path(mask_path))
     except Exception as exc:  # noqa: BLE001
-        return EvaluatedTrack(raw, video_id, track_id, candidate_class, canonical_concept, None, False, False, [f"invalid_mask_tube:{type(exc).__name__}"])
+        return _blocked_track(
+            raw,
+            video_id,
+            track_id,
+            candidate_class,
+            canonical_concept,
+            [_mask_load_error_tag(exc)],
+            [f"{type(exc).__name__}: {exc}; path={mask_path}"],
+        )
 
     areas = tube.masks.reshape(tube.masks.shape[0], -1).mean(axis=1)
     median_area = float(np.median(areas))
@@ -357,9 +501,16 @@ def evaluate_track(record: Mapping[str, Any], config: Mapping[str, Any], *, fps_
     )
 
 
-def evaluate_tracks(records: Iterable[Mapping[str, Any]], config: Mapping[str, Any], *, ffprobe_bin: str = "ffprobe") -> list[EvaluatedTrack]:
-    resolver = VideoFpsResolver(ffprobe_bin=ffprobe_bin)
-    return [evaluate_track(record, config, fps_resolver=resolver) for record in records]
+def evaluate_tracks(
+    records: Iterable[Mapping[str, Any]],
+    config: Mapping[str, Any],
+    *,
+    ffprobe_bin: str = "ffprobe",
+    path_resolver: PathResolver | None = None,
+) -> list[EvaluatedTrack]:
+    fps_resolver = VideoFpsResolver(ffprobe_bin=ffprobe_bin)
+    resolver = path_resolver or PathResolver({})
+    return [evaluate_track(record, config, fps_resolver=fps_resolver, path_resolver=resolver) for record in records]
 
 
 def _bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> tuple[float, float]:
@@ -508,6 +659,7 @@ def audit_record(track: EvaluatedTrack) -> Dict[str, Any]:
         "selection_role": track.selection_role,
         "secondary_pool_size": track.secondary_pool_size,
         "rejection_tags": track.rejection_tags,
+        "rejection_reasons": track.rejection_reasons,
     }
     payload.update(metric_payload(track))
     return payload

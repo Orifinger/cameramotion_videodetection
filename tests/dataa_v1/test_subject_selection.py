@@ -96,6 +96,27 @@ def test_no_primary_produces_no_case(tmp_path: Path) -> None:
     assert selections["v1"].selected is None
 
 
+def test_subject_selection_accepts_verified_mask_alias(tmp_path: Path) -> None:
+    track = _track(tmp_path, video_id="v1", track_id="target", box=(35, 35, 30, 30))
+    alias_path = track.pop("mask_tube_path")
+    track["mask_npz_path"] = alias_path
+    evaluated, selections = _select([track])
+    assert selections["v1"].selected is not None
+    assert evaluated[0].record["mask_tube_path"] == alias_path
+    assert evaluated[0].record["subject_selection_mask_path_key"] == "mask_npz_path"
+
+
+def test_invalid_mask_tube_records_detailed_reason(tmp_path: Path) -> None:
+    bad_mask = tmp_path / "bad.npz"
+    np.savez_compressed(bad_mask, wrong=np.zeros((1,), dtype=np.uint8))
+    track = _track(tmp_path, video_id="v1", track_id="target", box=(35, 35, 30, 30))
+    track["mask_tube_path"] = str(bad_mask)
+    evaluated, selections = _select([track])
+    assert selections["v1"].selected is None
+    assert evaluated[0].rejection_tags == ["invalid_mask_tube:npz_missing_frame_indices_or_masks"]
+    assert "npz must contain frame_indices and masks" in evaluated[0].rejection_reasons[0]
+
+
 def test_large_edge_low_quality_does_not_crush_stable_subject(tmp_path: Path) -> None:
     records = [
         _track(tmp_path, video_id="v1", track_id="edge", box=(0, 0, 45, 90), quality=0.05),
