@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -33,6 +34,10 @@ DEFAULT_OUT_CATALOG = Path("res/dataA_v1/catalogs/subject_first_target_catalog.j
 DEFAULT_OUT_AUDIT_JSON = Path("res/dataA_v1/audits/subject_first_selection_audit.json")
 DEFAULT_OUT_AUDIT_CSV = Path("res/dataA_v1/audits/subject_first_selection_audit.csv")
 DEFAULT_OUT_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace_execution_plan.json")
+
+
+def _default_num_workers() -> int:
+    return max(1, min(96, (os.cpu_count() or 2) // 2))
 
 
 def _repo_root() -> Path:
@@ -235,6 +240,7 @@ def build_subject_first_plan(
     seed: int | None = None,
     dry_run: bool = False,
     progress_every: int = 0,
+    num_workers: int = 1,
     config_overrides: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     overrides: Dict[str, Any] = dict(config_overrides or {})
@@ -243,7 +249,14 @@ def build_subject_first_plan(
     config = load_selection_config(selection_config, overrides=overrides)
     records = load_track_bank_records(track_bank)
     resolver = PathResolver(read_json(path_mapping) if path_mapping else {})
-    evaluated = evaluate_tracks(records, config, ffprobe_bin=ffprobe_bin, path_resolver=resolver, progress_every=progress_every)
+    evaluated = evaluate_tracks(
+        records,
+        config,
+        ffprobe_bin=ffprobe_bin,
+        path_resolver=resolver,
+        progress_every=progress_every,
+        num_workers=num_workers,
+    )
     selections = select_subjects_by_video(evaluated, config)
     selected_by_video = {video_id: choice.selected for video_id, choice in selections.items() if choice.selected is not None}
 
@@ -364,6 +377,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--out-audit-csv", type=Path, default=DEFAULT_OUT_AUDIT_CSV)
     parser.add_argument("--out-plan", type=Path, default=DEFAULT_OUT_PLAN)
     parser.add_argument("--ffprobe-bin", default="ffprobe")
+    parser.add_argument("--num-workers", type=int, default=_default_num_workers())
     parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -394,6 +408,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             seed=args.seed,
             dry_run=bool(args.dry_run),
             progress_every=max(0, int(args.progress_every)),
+            num_workers=max(1, int(args.num_workers)),
             config_overrides=_threshold_overrides(args),
         )
     except DataAError as exc:

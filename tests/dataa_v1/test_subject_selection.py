@@ -81,6 +81,20 @@ def test_primary_secondary_sampling_is_seeded_and_reproducible(tmp_path: Path) -
     assert selected_a["v1"].selected.selection_role == "eligible_secondary"
 
 
+def test_parallel_evaluation_matches_single_process(tmp_path: Path) -> None:
+    records = [
+        _track(tmp_path, video_id="v1", track_id="primary", box=(35, 35, 30, 30), quality=0.95),
+        _track(tmp_path, video_id="v1", track_id="secondary", box=(10, 10, 22, 22), quality=0.8),
+        _track(tmp_path, video_id="v2", track_id="other", box=(30, 30, 28, 28), quality=0.9),
+    ]
+    cfg = load_selection_config(None)
+    single = evaluate_tracks(records, cfg, num_workers=1)
+    parallel = evaluate_tracks(records, cfg, num_workers=2)
+    assert [item.track_id for item in parallel] == [item.track_id for item in single]
+    assert [round(item.subject_score, 8) for item in parallel] == [round(item.subject_score, 8) for item in single]
+    assert select_subjects_by_video(parallel, cfg)["v1"].selected.track_id == select_subjects_by_video(single, cfg)["v1"].selected.track_id
+
+
 def test_no_secondary_uses_primary(tmp_path: Path) -> None:
     records = [_track(tmp_path, video_id="v1", track_id="primary", box=(35, 35, 30, 30))]
     _evaluated, selections = _select(records)

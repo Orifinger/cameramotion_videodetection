@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import random
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
@@ -509,17 +510,66 @@ def evaluate_tracks(
     ffprobe_bin: str = "ffprobe",
     path_resolver: PathResolver | None = None,
     progress_every: int = 0,
+    num_workers: int = 1,
 ) -> list[EvaluatedTrack]:
     fps_resolver = VideoFpsResolver(ffprobe_bin=ffprobe_bin)
     resolver = path_resolver or PathResolver({})
     items = list(records)
     total = len(items)
+    workers = max(1, min(int(num_workers), total or 1))
+    if progress_every > 0:
+        print(f"subject_selection workers: {workers}", file=sys.stderr, flush=True)
+    if workers > 1 and total > 1:
+        return _evaluate_tracks_parallel(
+            items,
+            config,
+            ffprobe_bin=ffprobe_bin,
+            path_resolver=resolver,
+            progress_every=progress_every,
+            num_workers=workers,
+        )
+
     evaluated: list[EvaluatedTrack] = []
     for index, record in enumerate(items, start=1):
         evaluated.append(evaluate_track(record, config, fps_resolver=fps_resolver, path_resolver=resolver))
         if progress_every > 0 and (index == 1 or index % progress_every == 0 or index == total):
             print(f"subject_selection progress: evaluated {index}/{total} tracks", file=sys.stderr, flush=True)
     return evaluated
+
+
+def _evaluate_track_worker(payload: tuple[Mapping[str, Any], Mapping[str, Any], str, PathResolver]) -> EvaluatedTrack:
+    record, config, ffprobe_bin, resolver = payload
+    return evaluate_track(
+        record,
+        config,
+        fps_resolver=VideoFpsResolver(ffprobe_bin=ffprobe_bin),
+        path_resolver=resolver,
+    )
+
+
+def _evaluate_tracks_parallel(
+    items: list[Mapping[str, Any]],
+    config: Mapping[str, Any],
+    *,
+    ffprobe_bin: str,
+    path_resolver: PathResolver,
+    progress_every: int,
+    num_workers: int,
+) -> list[EvaluatedTrack]:
+    total = len(items)
+    evaluated: list[EvaluatedTrack | None] = [None] * total
+    done = 0
+    with ProcessPoolExecutor(max_workers=num_workers) as pool:
+        futures = {
+            pool.submit(_evaluate_track_worker, (record, config, ffprobe_bin, path_resolver)): index
+            for index, record in enumerate(items)
+        }
+        for future in as_completed(futures):
+            evaluated[futures[future]] = future.result()
+            done += 1
+            if progress_every > 0 and (done == 1 or done % progress_every == 0 or done == total):
+                print(f"subject_selection progress: evaluated {done}/{total} tracks", file=sys.stderr, flush=True)
+    return [item for item in evaluated if item is not None]
 
 
 def _bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> tuple[float, float]:
