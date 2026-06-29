@@ -159,6 +159,8 @@ def test_subject_first_plan_loads_and_validates(tmp_path: Path) -> None:
     track_bank = tmp_path / "tracks.json"
     base_plan = tmp_path / "base_plan.json"
     out_plan = tmp_path / "frozen_subject_first.json"
+    out_coverage = tmp_path / "coverage.json"
+    out_reserve = tmp_path / "reserve.json"
     write_json(track_bank, {"tracks": [target, donor]})
     write_json(
         base_plan,
@@ -182,6 +184,8 @@ def test_subject_first_plan_loads_and_validates(tmp_path: Path) -> None:
         out_audit_json=tmp_path / "audit.json",
         out_audit_csv=tmp_path / "audit.csv",
         out_plan=out_plan,
+        out_coverage_plan=out_coverage,
+        out_reserve_plan=out_reserve,
     )
     assert summary["validation"]["valid"]
     plan = load_execution_plan(execution_plan_path=out_plan, track_bank_path=None, path_mapping_path=None)
@@ -189,10 +193,80 @@ def test_subject_first_plan_loads_and_validates(tmp_path: Path) -> None:
     assert plan.cases[0].sampling_meta["target_selection"]["selection_role"] in {"fallback_primary", "primary_subject"}
 
 
+def test_subject_first_writes_coverage_and_reserve_plans(tmp_path: Path) -> None:
+    clean = _track(tmp_path, video_id="clean_video", track_id="clean", box=(35, 35, 30, 30))
+    relaxed = _track(tmp_path, video_id="relaxed_video", track_id="relaxed", box=(49, 49, 4, 4))
+    repair_target = _track(tmp_path, video_id="repair_video", track_id="repair_target", box=(35, 35, 30, 30), candidate_class="vehicle")
+    same_video_donor = _track(tmp_path, video_id="repair_video", track_id="same_video_donor", box=(20, 20, 25, 25), candidate_class="vehicle")
+    repair_donor = _track(tmp_path, video_id="donor_video", track_id="repair_donor", box=(20, 20, 25, 25), candidate_class="vehicle")
+    coverage_only = _track(tmp_path, video_id="coverage_only_video", track_id="coverage_only", box=(35, 35, 30, 30))
+    track_bank = tmp_path / "tracks.json"
+    base_plan = tmp_path / "base_plan.json"
+    out_plan = tmp_path / "clean.json"
+    out_coverage = tmp_path / "coverage.json"
+    out_reserve = tmp_path / "reserve.json"
+    write_json(track_bank, {"tracks": [clean, relaxed, repair_target, same_video_donor, repair_donor, coverage_only]})
+    write_json(
+        base_plan,
+        {
+            "cases": [
+                {
+                    "case_id": "case_clean",
+                    "operation": "object_attribute_edit",
+                    "generator_route": "vace14b_masktrack_text_edit",
+                    "target_track_id": "clean",
+                },
+                {
+                    "case_id": "case_relaxed",
+                    "operation": "object_attribute_edit",
+                    "generator_route": "vace14b_masktrack_text_edit",
+                    "target_track_id": "relaxed",
+                },
+                {
+                    "case_id": "case_repair",
+                    "operation": "object_swap",
+                    "generator_route": "vace14b_masktrack_reference_swap",
+                    "target_track_id": "repair_target",
+                    "donor_track_id": "same_video_donor",
+                },
+            ]
+        },
+    )
+    summary = build_subject_first_plan(
+        track_bank=track_bank,
+        selection_config=None,
+        base_plan=base_plan,
+        out_catalog=tmp_path / "catalog.json",
+        out_audit_json=tmp_path / "audit.json",
+        out_audit_csv=tmp_path / "audit.csv",
+        out_plan=out_plan,
+        out_coverage_plan=out_coverage,
+        out_reserve_plan=out_reserve,
+        num_workers=1,
+    )
+    assert summary["validation"]["valid"]
+    assert summary["coverage_validation"]["valid"]
+    assert summary["reserve_validation"]["valid"]
+
+    clean_payload = load_execution_plan(execution_plan_path=out_plan, track_bank_path=None, path_mapping_path=None)
+    coverage_payload = load_execution_plan(execution_plan_path=out_coverage, track_bank_path=None, path_mapping_path=None)
+    reserve_payload = load_execution_plan(execution_plan_path=out_reserve, track_bank_path=None, path_mapping_path=None)
+    assert [case.case_id for case in clean_payload.cases] == ["case_clean"]
+    assert {case.case_id for case in reserve_payload.cases} == {case.case_id for case in coverage_payload.cases} - {"case_clean"}
+    repaired = next(case for case in coverage_payload.cases if case.case_id == "case_repair")
+    assert repaired.donor is not None
+    assert repaired.donor.video_id == "donor_video"
+    relaxed_case = next(case for case in coverage_payload.cases if case.case_id == "case_relaxed")
+    assert relaxed_case.sampling_meta["target_selection"]["quality_tier"] == "relaxed_rescue"
+    assert any(case.case_id.startswith("dataA_v1_subject_first_coverage_") for case in coverage_payload.cases)
+
+
 def test_subject_first_dry_run_writes_audit_not_plan(tmp_path: Path) -> None:
     track = _track(tmp_path, video_id="v1", track_id="target", box=(35, 35, 30, 30))
     track_bank = tmp_path / "tracks.json"
     out_plan = tmp_path / "plan.json"
+    out_coverage = tmp_path / "coverage.json"
+    out_reserve = tmp_path / "reserve.json"
     write_json(track_bank, {"tracks": [track]})
     summary = build_subject_first_plan(
         track_bank=track_bank,
@@ -202,8 +276,12 @@ def test_subject_first_dry_run_writes_audit_not_plan(tmp_path: Path) -> None:
         out_audit_json=tmp_path / "audit.json",
         out_audit_csv=tmp_path / "audit.csv",
         out_plan=out_plan,
+        out_coverage_plan=out_coverage,
+        out_reserve_plan=out_reserve,
         dry_run=True,
     )
     assert summary["summary"]["videos_with_primary"] == 1
     assert (tmp_path / "audit.json").is_file()
     assert not out_plan.exists()
+    assert not out_coverage.exists()
+    assert not out_reserve.exists()
