@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Audit frozen VACE Stage-1 cases before any video generation.
 
-P1 only verifies plan/track references and mask-tube accessibility. It never
-calls VACE, changes the frozen plan, creates media, or re-samples cases.
+P1 verifies plan/track references and mask-tube accessibility. It never calls
+VACE, changes the frozen plan, creates media, or re-samples cases. A readable
+local mask under /tmp is an allowed runtime input; its volatile storage state is
+recorded in the report but does not itself block generation.
 """
 
 from __future__ import annotations
@@ -46,12 +48,13 @@ def load_cases_for_audit(plan_path: Path, track_bank_path: Path, mapping_path: O
 def _path_blockers(role: str, path: ResolvedPath, mask: Mapping[str, Any]) -> List[str]:
     if path.state == "missing":
         return [f"{role}_missing_mask"]
-    if path.state == "readable_volatile":
-        return [f"{role}_volatile_mask"]
     if path.state == "mapped_but_unverified":
         return [f"{role}_mapped_but_unverified"]
-    if path.state == "readable_persistent" and not bool(mask.get("valid")):
+    if path.state in {"readable_persistent", "readable_volatile"} and not bool(mask.get("valid")):
         return [f"{role}_invalid_npz"]
+    # /tmp is the intended high-throughput runtime cache for CameraBench video
+    # and SAM3 mask tubes. Its state remains visible in the serialized report,
+    # but readable volatile input is not a generation blocker.
     return []
 
 
@@ -68,8 +71,6 @@ def audit_case(case: CanonicalCaseSpec) -> Dict[str, Any]:
 
     if any(item.endswith("missing_mask") or item.endswith("missing_mask_path") for item in blockers):
         status = "blocked_missing_mask"
-    elif any("volatile" in item for item in blockers):
-        status = "blocked_volatile_mask"
     elif any("mapped_but_unverified" in item for item in blockers):
         status = "blocked_mapped_but_unverified"
     elif any("invalid_npz" in item for item in blockers):
@@ -171,6 +172,18 @@ def _self_test() -> int:
         assert report["cases"][0]["stage_status"] == "preflight_passed", report
         assert report["cases"][1]["stage_status"] == "blocked_invalid_mask_npz", report
         assert "int32" in report["cases"][1]["target"]["mask_npz"]["reason"], report
+
+        volatile_resolved = ResolvedPath(
+            original_path="/tmp/sam3/track.npz",
+            resolved_path="/tmp/sam3/track.npz",
+            state="readable_volatile",
+            exists=True,
+            is_volatile=True,
+        )
+        valid_mask = {"valid": True}
+        invalid_mask = {"valid": False}
+        assert _path_blockers("target", volatile_resolved, valid_mask) == []
+        assert _path_blockers("target", volatile_resolved, invalid_mask) == ["target_invalid_npz"]
     print("self-test passed")
     return 0
 
