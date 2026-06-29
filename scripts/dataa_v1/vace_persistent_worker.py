@@ -13,13 +13,14 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.dataa_v1.common import DataAError, read_json, write_json
 from scripts.dataa_v1.config import load_config
+from scripts.dataa_v1.media_io import crop_video_frames
 from scripts.dataa_v1.oss_sync import mark_ready_to_upload, upload_case_bundle
 from scripts.dataa_v1.package_vace_case import package_case
 from scripts.dataa_v1.run_state import RunPaths, RunState
@@ -50,6 +51,25 @@ def _frame_count_from_manifest(manifest: Mapping[str, Any]) -> int:
     return int(canonical.get("frame_count") or 81)
 
 
+def _postprocess_from_manifest(manifest: Mapping[str, Any], *, attempt_dir: Path) -> Dict[str, Any]:
+    source_clip = manifest.get("source_clip") or {}
+    canonical = source_clip.get("canonical") or {}
+    frame_count = int(canonical.get("frame_count") or 81)
+    valid_frame_count = int(canonical.get("valid_frame_count") or frame_count)
+    pad_frame_count = int(canonical.get("pad_frame_count") or max(0, frame_count - valid_frame_count))
+    crop_after_generation = bool(canonical.get("crop_generated_to_valid_frames") or valid_frame_count < frame_count)
+    return {
+        "frame_count": frame_count,
+        "valid_frame_count": valid_frame_count,
+        "pad_frame_count": pad_frame_count,
+        "pad_mode": str(canonical.get("pad_mode") or "none"),
+        "crop_after_generation": crop_after_generation,
+        "fps": int(canonical.get("fps") or 16),
+        "raw_output_path": str(attempt_dir / "generated_raw.mp4"),
+        "trimmed_output_path": str(attempt_dir / "generated_trimmed.mp4"),
+    }
+
+
 def _job_from_manifest(manifest: Mapping[str, Any], *, attempt_dir: Path, size: str, seed: int) -> VaceJob:
     source_clip = manifest.get("source_clip") or {}
     mask_video = manifest.get("mask_video") or {}
@@ -71,6 +91,29 @@ def _job_from_manifest(manifest: Mapping[str, Any], *, attempt_dir: Path, size: 
         size=size,
         seed=seed,
     )
+
+
+def _postprocess_generation(result: Dict[str, Any], postprocess: Mapping[str, Any], *, ffmpeg_bin: str) -> Dict[str, Any]:
+    detail = dict(postprocess)
+    if not bool(detail.get("crop_after_generation")):
+        detail["status"] = "not_required"
+        detail["final_output_path"] = result["output_path"]
+        result["postprocess"] = detail
+        result["final_output_path"] = result["output_path"]
+        return result
+    crop = crop_video_frames(
+        source_video=Path(str(result["output_path"])),
+        out_path=Path(str(detail["trimmed_output_path"])),
+        frame_count=int(detail["valid_frame_count"]),
+        fps=int(detail["fps"]),
+        ffmpeg_bin=ffmpeg_bin,
+    )
+    detail["status"] = "cropped_to_valid_frames"
+    detail["crop"] = crop
+    detail["final_output_path"] = crop["path"]
+    result["postprocess"] = detail
+    result["final_output_path"] = crop["path"]
+    return result
 
 
 def run_worker(*, config_path: Path, shard_path: Path, worker_id: int, run_id: str) -> int:
@@ -128,8 +171,9 @@ def run_worker(*, config_path: Path, shard_path: Path, worker_id: int, run_id: s
                         package_result = {"status": status, "case_id": case_id, "skip_generation": True}
                     else:
                         job = _job_from_manifest(manifest, attempt_dir=attempt_dir, size=vace_size, seed=seed)
+                        postprocess = _postprocess_from_manifest(manifest, attempt_dir=attempt_dir)
                         state.append_status(case_id, "packed", worker_id=worker_id, detail={"manifest": str(attempt_dir / "case_manifest.json")})
-                        package_result = {"status": "packed", "case_id": case_id, "vace_job": job.__dict__}
+                        package_result = {"status": "packed", "case_id": case_id, "vace_job": job.__dict__, "postprocess": postprocess}
                 except DataAError as exc:
                     status = _status_from_error(exc)
                     state.append_status(case_id, status, worker_id=worker_id, detail={"error": str(exc)})
@@ -150,6 +194,11 @@ def run_worker(*, config_path: Path, shard_path: Path, worker_id: int, run_id: s
             continue
         if rank == 0:
             attempt_dir = Path(job.output_path).parent
+            try:
+                result = _postprocess_generation(result, descriptor.get("postprocess") or {}, ffmpeg_bin=ffmpeg_bin)
+            except DataAError as exc:
+                state.append_status(job.case_id, "blocked_generation_postprocess_failure", worker_id=worker_id, detail={"error": str(exc)})
+                continue
             write_json(attempt_dir / "generation_result.json", result)
             state.append_status(job.case_id, "generated", worker_id=worker_id, detail=result)
             mark_ready_to_upload(attempt_dir)

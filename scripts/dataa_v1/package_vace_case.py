@@ -190,6 +190,7 @@ def package_case(
         output_dir=str(attempt_dir),
         donor_reference=donor_reference_path,
         dry_run=dry_run,
+        frame_num=clip.canonical_frame_count,
     )
     manifest = build_case_manifest(
         case_id=case.case_id,

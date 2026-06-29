@@ -149,6 +149,10 @@ class PersistentVaceRuntime:
             raise DataAError(f"blocked_vace_generation_failure: model_prompt is empty for {job.case_id}")
         if job.size not in self._size_configs:
             raise DataAError(f"blocked_vace_generation_failure: unsupported VACE size '{job.size}' for {job.case_id}")
+        if job.frame_count <= 0 or job.frame_count % 4 != 1:
+            raise DataAError(
+                f"blocked_vace_generation_failure: frame_count must be 4n+1 for {job.case_id}, got {job.frame_count}"
+            )
 
         refs = None if not job.donor_reference else [job.donor_reference]
         torch = self._torch

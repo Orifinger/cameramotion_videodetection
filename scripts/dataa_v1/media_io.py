@@ -133,7 +133,12 @@ def export_canonical_source_clip(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     start_time = start_frame / source_fps
     duration = (end_frame - start_frame + 1) / source_fps
-    scale = f"scale={width}:{height}:flags=lanczos,fps={canonical_fps},trim=end_frame={frame_count},setpts=PTS-STARTPTS"
+    scale = (
+        f"scale={width}:{height}:flags=lanczos,"
+        f"fps={canonical_fps},"
+        "tpad=stop_mode=clone:stop_duration=60,"
+        f"trim=end_frame={frame_count},setpts=PTS-STARTPTS"
+    )
     cmd = [
         ffmpeg_bin,
         "-y",
@@ -162,6 +167,43 @@ def export_canonical_source_clip(
     if proc.returncode != 0:
         raise DataAError(f"ffmpeg canonical source_clip export failed: {proc.stderr.strip()}")
     return {"path": str(out_path), "command": cmd, "audio_policy": audio_policy}
+
+
+def crop_video_frames(
+    *,
+    source_video: Path,
+    out_path: Path,
+    frame_count: int,
+    fps: int,
+    ffmpeg_bin: str = "ffmpeg",
+) -> Dict[str, Any]:
+    if frame_count <= 0:
+        raise DataAError(f"frame_count must be positive for video crop, got {frame_count}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        str(source_video),
+        "-vf",
+        f"trim=end_frame={frame_count},setpts=PTS-STARTPTS",
+        "-frames:v",
+        str(frame_count),
+        "-r",
+        str(fps),
+        "-fps_mode",
+        "cfr",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(out_path),
+    ]
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if proc.returncode != 0:
+        raise DataAError(f"ffmpeg video crop failed: {proc.stderr.strip()}")
+    return {"path": str(out_path), "command": cmd, "frame_count": frame_count, "fps": fps}
 
 
 def assert_video_compatible(a: VideoMeta, b: VideoMeta) -> None:

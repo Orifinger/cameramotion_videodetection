@@ -16,6 +16,9 @@ from .media_io import export_canonical_source_clip, export_source_real_raw, ffpr
 
 def canonical_video_plan(attempt_dir: Path, clip: ClipSelection, profile: VaceProfile, *, source_video_path: str | None) -> Dict[str, Any]:
     height, width = profile.landscape_size
+    valid_frame_count = int(clip.selection_meta.get("valid_canonical_frame_count") or clip.canonical_frame_count)
+    pad_frame_count = int(clip.selection_meta.get("pad_canonical_frames") or 0)
+    pad_mode = str(clip.selection_meta.get("pad_mode") or "none")
     return {
         "source_video_path": source_video_path,
         "source_real_raw_path": str(attempt_dir / "source_real_raw.mp4"),
@@ -28,6 +31,11 @@ def canonical_video_plan(attempt_dir: Path, clip: ClipSelection, profile: VacePr
         "canonical": {
             "fps": clip.canonical_fps,
             "frame_count": clip.canonical_frame_count,
+            "valid_frame_count": valid_frame_count,
+            "pad_frame_count": pad_frame_count,
+            "pad_mode": pad_mode,
+            "padded_short_clip": bool(clip.selection_meta.get("padded_short_clip", False)),
+            "crop_generated_to_valid_frames": pad_frame_count > 0,
             "height": height,
             "width": width,
             "profile": profile.name,
@@ -36,6 +44,7 @@ def canonical_video_plan(attempt_dir: Path, clip: ClipSelection, profile: VacePr
                 for i, frame in enumerate(clip.canonical_to_source_frames)
             ],
         },
+        "selection_meta": clip.selection_meta,
         "media_created": False,
         "note": "dry-run scaffold records planned canonical media; server execution must render actual mp4 files",
     }
