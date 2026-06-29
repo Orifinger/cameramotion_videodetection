@@ -39,6 +39,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "sample_shift": 16,
         "sample_guide_scale": 5.0,
         "use_prompt_extend": "plain",
+        "force_flash_attn_2": True,
     },
     "gpu": {
         "worker_groups": 4,

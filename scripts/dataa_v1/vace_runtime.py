@@ -42,6 +42,7 @@ class PersistentVaceRuntime:
         self._rank = 0
         self._world_size = 1
         self._device = 0
+        self._attention_backend = "default"
 
     def initialize_once(self) -> None:
         if self.initialized:
@@ -70,6 +71,21 @@ class PersistentVaceRuntime:
                 "vace_runtime_import_failed: install Wan2.1/VACE runtime dependencies on the server; "
                 f"original error: {exc}"
             ) from exc
+
+        if bool(self.config.get("force_flash_attn_2", True)):
+            try:
+                import wan.modules.attention as wan_attention
+            except Exception as exc:  # noqa: BLE001
+                raise DataAError(f"vace_runtime_import_failed: cannot inspect Wan attention backend: {exc}") from exc
+            if not bool(getattr(wan_attention, "FLASH_ATTN_2_AVAILABLE", False)):
+                raise DataAError(
+                    "vace_runtime_missing_flash_attn_2: force_flash_attn_2 is enabled but Wan cannot import FlashAttention 2"
+                )
+            if bool(getattr(wan_attention, "FLASH_ATTN_3_AVAILABLE", False)):
+                wan_attention.FLASH_ATTN_3_AVAILABLE = False
+                self._attention_backend = "flash_attn_2_forced"
+            else:
+                self._attention_backend = "flash_attn_2"
 
         model_name = str(self.config.get("model_name", "vace-14B"))
         if model_name not in WAN_CONFIGS:
@@ -186,6 +202,7 @@ class PersistentVaceRuntime:
             "output_path": job.output_path,
             "rank": self._rank,
             "world_size": self._world_size,
+            "attention_backend": self._attention_backend,
             "completed_at_utc": utc_now_iso(),
         }
         if self._rank == 0:
