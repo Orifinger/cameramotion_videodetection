@@ -75,6 +75,11 @@ def _job_from_manifest(manifest: Mapping[str, Any], *, attempt_dir: Path, size: 
     mask_video = manifest.get("mask_video") or {}
     prompt = manifest.get("prompt") or {}
     target_mask = mask_video.get("target_mask_gen_video") or str(attempt_dir / "target_mask_gen.mp4")
+    vace_input = (
+        source_clip.get("vace_input_path")
+        or source_clip.get("source_vace_condition_path")
+        or str(attempt_dir / "source_vace_condition.mp4")
+    )
     donor_reference = None
     donor = manifest.get("donor")
     planned_reference = attempt_dir / "donor_reference.png"
@@ -82,7 +87,7 @@ def _job_from_manifest(manifest: Mapping[str, Any], *, attempt_dir: Path, size: 
         donor_reference = str(planned_reference)
     return VaceJob(
         case_id=str(manifest["case_id"]),
-        source_clip=str(source_clip.get("source_clip_path") or attempt_dir / "source_clip.mp4"),
+        source_clip=str(vace_input),
         target_mask_gen_video=str(target_mask),
         model_prompt=str(prompt.get("model_prompt") or ""),
         output_path=str(attempt_dir / "generated_raw.mp4"),

@@ -32,6 +32,7 @@ from scripts.dataa_v1.mask_visualization import planned_mask_visualizations
 from scripts.dataa_v1.prompt_builder import build_prompts
 from scripts.dataa_v1.schema import serialize_case
 from scripts.dataa_v1.vace_command import build_vace_command_spec
+from scripts.dataa_v1.vace_condition import export_vace_condition_video, resize_masks_nearest
 
 
 def _find_case(cases: list[Any], case_id: str) -> Any:
@@ -46,6 +47,37 @@ def _load_cases(plan: Path, track_bank: Optional[Path], path_mapping: Optional[P
         return load_cases_for_audit(plan, track_bank, path_mapping)
     execution_plan = load_execution_plan(execution_plan_path=plan, track_bank_path=None, path_mapping_path=path_mapping)
     return execution_plan.cases
+
+
+def _video_shape(meta: Any) -> dict[str, Any]:
+    return {"frame_count": meta.frame_count, "fps": meta.fps, "height": meta.height, "width": meta.width}
+
+
+def _validate_vace_input_media(
+    *,
+    source_clip_path: Path,
+    target_mask_gen_path: Path,
+    source_vace_condition_path: Path,
+    ffprobe_bin: str,
+) -> dict[str, Any]:
+    metas = {
+        "source_clip": ffprobe_video(source_clip_path, ffprobe_bin=ffprobe_bin),
+        "target_mask_gen": ffprobe_video(target_mask_gen_path, ffprobe_bin=ffprobe_bin),
+        "source_vace_condition": ffprobe_video(source_vace_condition_path, ffprobe_bin=ffprobe_bin),
+    }
+    shapes = {label: _video_shape(meta) for label, meta in metas.items()}
+    signatures = {
+        label: (shape["frame_count"], shape["fps"], shape["height"], shape["width"])
+        for label, shape in shapes.items()
+    }
+    if len(set(signatures.values())) != 1:
+        raise DataAError(
+            "blocked_vace_input_shape_mismatch: "
+            f"source_clip={shapes['source_clip']} "
+            f"target_mask_gen={shapes['target_mask_gen']} "
+            f"source_vace_condition={shapes['source_vace_condition']}"
+        )
+    return {"status": "ok", "shapes": shapes}
 
 
 def package_case(
@@ -123,6 +155,17 @@ def package_case(
 
     aligned_raw, alignment_meta = align_masks_to_canonical(target_tube, clip.canonical_to_source_frames)
     masks, mask_params = process_masks(aligned_raw, MaskProcessingConfig())
+    height, width = profile.landscape_size
+    masks = {
+        name: resize_masks_nearest(mask, height=height, width=width)
+        for name, mask in masks.items()
+    }
+    mask_params["canonical_resize"] = {
+        "height": height,
+        "width": width,
+        "method": "nearest",
+        "scope": "case_intermediate_masks_only",
+    }
     mask_layers = {
         "M_raw": str(attempt_dir / "target_mask_raw.npz"),
         "M_edit": str(attempt_dir / "target_mask_edit.npz"),
@@ -170,6 +213,10 @@ def package_case(
 
     prompts = build_prompts(case)
     source_clip = canonical_video_plan(attempt_dir, clip, profile, source_video_path=case.target.video_path)
+    source_vace_condition_path = attempt_dir / "source_vace_condition.mp4"
+    source_clip["source_vace_condition_path"] = str(source_vace_condition_path)
+    source_clip["vace_input_path"] = str(source_vace_condition_path)
+    source_clip["vace_condition"] = {"status": "not_run_in_dry_run"}
     if execute_media and case.target.video_path:
         source_clip.update(
             export_canonical_videos(
@@ -181,10 +228,23 @@ def package_case(
                 ffprobe_bin=ffprobe_bin,
             )
         )
+        source_clip["vace_condition"] = export_vace_condition_video(
+            source_clip=Path(source_clip["source_clip_path"]),
+            masks=masks["M_gen"],
+            out_path=source_vace_condition_path,
+            ffmpeg_bin=ffmpeg_bin,
+            ffprobe_bin=ffprobe_bin,
+        )
+        source_clip["vace_input_validation"] = _validate_vace_input_media(
+            source_clip_path=Path(source_clip["source_clip_path"]),
+            target_mask_gen_path=mask_video_path,
+            source_vace_condition_path=source_vace_condition_path,
+            ffprobe_bin=ffprobe_bin,
+        )
     command = build_vace_command_spec(
         case_id=case.case_id,
         vace_repo_dir="third_party/VACE",
-        source_clip=source_clip["source_clip_path"],
+        source_clip=source_clip["vace_input_path"],
         mask_video=str(mask_video_path),
         prompt=prompts["model_prompt"],
         output_dir=str(attempt_dir),
