@@ -7,8 +7,9 @@ import numpy as np
 from scripts.dataa_v1.build_subject_first_execution_plan import build_subject_first_plan
 from scripts.dataa_v1.build_continuation_execution_plan import build_continuation_plan
 from scripts.dataa_v1.build_subject_first_execution_plan import _is_person_track
-from scripts.dataa_v1.common import write_json
+from scripts.dataa_v1.common import read_json, write_json
 from scripts.dataa_v1.execution_plan import load_execution_plan
+from scripts.dataa_v1.merge_sam3_track_banks import merge_track_banks
 from scripts.dataa_v1.schema import TrackRef
 from scripts.dataa_v1.subject_selection import (
     evaluate_tracks,
@@ -356,6 +357,7 @@ def test_continuation_skips_completed_and_prefers_person_swap(tmp_path: Path) ->
         out_vace14b_plan=tmp_path / "continuation_14b.json",
         out_vace13b_plan=tmp_path / "continuation_13b.json",
         out_audit=tmp_path / "continuation_audit.json",
+        out_rerun_manifest=tmp_path / "continuation_rerun_manifest.json",
         num_workers=1,
     )
     assert summary["validation"]["valid"]
@@ -367,6 +369,132 @@ def test_continuation_skips_completed_and_prefers_person_swap(tmp_path: Path) ->
     assert case.sampling_meta["continuation"]["strategy"] == "person_preferred"
     assert case.sampling_meta["mask_policy"]["person_bbox_disabled"] is True
     assert case.sampling_meta["mask_policy"]["variant_type"] != "expanded_bbox"
+
+
+def test_continuation_keeps_good_pair_and_writes_rerun_manifest(tmp_path: Path) -> None:
+    target = _track(tmp_path, video_id="target_video", track_id="target_vehicle", box=(20, 20, 40, 40), candidate_class="vehicle")
+    donor = _track(tmp_path, video_id="donor_video", track_id="donor_vehicle", box=(25, 25, 35, 35), candidate_class="vehicle")
+    track_bank = tmp_path / "tracks.json"
+    base_plan = tmp_path / "base_plan.json"
+    rerun_manifest = tmp_path / "rerun_manifest.json"
+    write_json(track_bank, {"tracks": [target, donor]})
+    write_json(
+        base_plan,
+        {
+            "cases": [
+                {
+                    "case_id": "case_good_pair",
+                    "operation": "object_swap",
+                    "generator_route": "vace14b_masktrack_reference_swap",
+                    "target_track_id": "target_vehicle",
+                    "donor_track_id": "donor_vehicle",
+                }
+            ]
+        },
+    )
+
+    summary = build_continuation_plan(
+        track_bank=track_bank,
+        base_plan=base_plan,
+        run_roots=[tmp_path / "run"],
+        selection_config=None,
+        out_plan=tmp_path / "continuation.json",
+        out_vace14b_plan=tmp_path / "continuation_14b.json",
+        out_vace13b_plan=tmp_path / "continuation_13b.json",
+        out_audit=tmp_path / "continuation_audit.json",
+        out_rerun_manifest=rerun_manifest,
+        num_workers=1,
+    )
+
+    assert summary["validation"]["case_count"] == 1
+    assert summary["summary"]["qwen_sam3_rerun_candidate_count"] == 0
+    plan = load_execution_plan(execution_plan_path=tmp_path / "continuation.json", track_bank_path=None, path_mapping_path=None)
+    assert plan.cases[0].operation == "object_swap"
+    assert plan.cases[0].target.track_id == "target_vehicle"
+    assert plan.cases[0].sampling_meta["continuation"]["strategy"] == "keep_good_base_pair"
+    manifest = read_json(rerun_manifest)
+    assert manifest["summary"]["kept_case_count"] == 1
+    assert manifest["kept_video_ids"] == ["target_video"]
+    assert manifest["rerun_candidates"] == []
+
+
+def test_continuation_sends_bad_unfinished_pair_to_rerun_manifest(tmp_path: Path) -> None:
+    target = _track(tmp_path, video_id="target_video", track_id="target_bag", box=(20, 20, 40, 40), candidate_class="bag")
+    donor = _track(tmp_path, video_id="donor_video", track_id="donor_human", box=(25, 25, 35, 35), candidate_class="human")
+    track_bank = tmp_path / "tracks.json"
+    base_plan = tmp_path / "base_plan.json"
+    rerun_manifest = tmp_path / "rerun_manifest.json"
+    write_json(track_bank, {"tracks": [target, donor]})
+    write_json(
+        base_plan,
+        {
+            "cases": [
+                {
+                    "case_id": "case_bad_pair",
+                    "operation": "object_swap",
+                    "generator_route": "vace14b_masktrack_reference_swap",
+                    "target_track_id": "target_bag",
+                    "donor_track_id": "donor_human",
+                }
+            ]
+        },
+    )
+
+    summary = build_continuation_plan(
+        track_bank=track_bank,
+        base_plan=base_plan,
+        run_roots=[tmp_path / "run"],
+        selection_config=None,
+        out_plan=tmp_path / "continuation.json",
+        out_vace14b_plan=tmp_path / "continuation_14b.json",
+        out_vace13b_plan=tmp_path / "continuation_13b.json",
+        out_audit=tmp_path / "continuation_audit.json",
+        out_rerun_manifest=rerun_manifest,
+        num_workers=1,
+    )
+
+    assert summary["validation"]["case_count"] == 0
+    assert summary["summary"]["qwen_sam3_rerun_candidate_count"] == 1
+    manifest = read_json(rerun_manifest)
+    assert manifest["rerun_video_ids"] == ["target_video"]
+    assert manifest["rerun_candidates"][0]["reason"] == "needs_qwen_sam3_rerun_and_repair"
+    assert manifest["rerun_candidates"][0]["pair_match"]["good_pair"] is False
+
+
+def test_merge_sam3_track_banks_replaces_only_rerun_videos(tmp_path: Path) -> None:
+    old_keep = _track(tmp_path, video_id="keep_video", track_id="old_keep", box=(20, 20, 40, 40))
+    old_replace = _track(tmp_path, video_id="replace_video", track_id="old_replace", box=(20, 20, 40, 40))
+    old_missing = _track(tmp_path, video_id="missing_video", track_id="old_missing", box=(20, 20, 40, 40))
+    new_replace = _track(tmp_path, video_id="replace_video", track_id="new_replace", box=(25, 25, 35, 35))
+    new_ignored = _track(tmp_path, video_id="ignored_video", track_id="new_ignored", box=(25, 25, 35, 35))
+    old_track_bank = tmp_path / "old_tracks.json"
+    rerun_track_bank = tmp_path / "rerun_tracks.json"
+    rerun_manifest = tmp_path / "rerun_manifest.json"
+    out_track_bank = tmp_path / "merged_tracks.json"
+    out_active = tmp_path / "active_tracks.json"
+    out_manifest = tmp_path / "merge_manifest.json"
+    write_json(old_track_bank, {"tracks": [old_keep, old_replace, old_missing]})
+    write_json(rerun_track_bank, {"tracks": [new_replace, new_ignored]})
+    write_json(rerun_manifest, {"rerun_video_ids": ["replace_video", "missing_video", "absent_video"]})
+
+    result = merge_track_banks(
+        old_track_bank=old_track_bank,
+        rerun_track_bank=rerun_track_bank,
+        rerun_manifest=rerun_manifest,
+        out_track_bank=out_track_bank,
+        out_active_track_bank=out_active,
+        out_manifest=out_manifest,
+    )
+
+    assert result["summary"]["merged_track_count"] == 3
+    merged = read_json(out_track_bank)
+    track_ids = {record["track_id"] for record in merged["tracks"]}
+    assert track_ids == {"old_keep", "new_replace", "old_missing"}
+    assert read_json(out_active)["tracks"] == merged["tracks"]
+    manifest = read_json(out_manifest)
+    assert manifest["replaced_video_ids"] == ["replace_video"]
+    assert manifest["rerun_failed_video_ids"] == ["absent_video", "missing_video"]
+    assert "ignored_video" not in {item["video_id"] for item in manifest["video_sources"]}
 
 
 def test_track_label_helpers_accept_trackref() -> None:

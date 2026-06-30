@@ -26,7 +26,6 @@ from scripts.dataa_v1.build_subject_first_execution_plan import (
     _operation_gate_report,
     _plan_payload,
     _repo_root,
-    _select_case_target,
     _summary,
     _validate_execution_cases_allow_empty,
 )
@@ -46,6 +45,13 @@ DEFAULT_OUT_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace_continuati
 DEFAULT_OUT_VACE14B_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace14b_continuation_plan.json")
 DEFAULT_OUT_VACE13B_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace13b_continuation_plan.json")
 DEFAULT_OUT_AUDIT = Path("res/dataA_v1/audits/subject_first_continuation_plan_audit.json")
+DEFAULT_OUT_RERUN_MANIFEST = Path("res/dataA_v1/audits/subject_first_qwen_sam3_rerun_manifest.json")
+GOOD_PAIR_MATCH_LEVELS = {
+    "same_canonical_concept",
+    "same_candidate_class",
+    "same_region_family",
+    "same_content_domain",
+}
 
 
 @dataclass(frozen=True)
@@ -196,22 +202,126 @@ def _track_kind(track: Any | None) -> str:
     return "object"
 
 
+def _track_raw(track: Any | None) -> Dict[str, Any]:
+    if track is None:
+        return {}
+    if hasattr(track, "record"):
+        return dict(track.record)
+    if isinstance(track, Mapping):
+        return dict(track)
+    raw = getattr(track, "raw", None)
+    if isinstance(raw, Mapping):
+        merged = dict(raw)
+    else:
+        merged = {}
+    for key in ("track_id", "video_id", "candidate_class", "canonical_concept", "display_phrase", "region_family", "content_domain", "style_domain"):
+        value = getattr(track, key, None)
+        if value not in (None, ""):
+            merged.setdefault(key, value)
+    return merged
+
+
+def _simple_pair_match(target: Any | None, donor: Any | None) -> Dict[str, Any]:
+    if donor is None:
+        return {"score": 0, "match_level": "missing_donor", "good_pair": False}
+    target_raw = _track_raw(target)
+    donor_raw = _track_raw(donor)
+    for key, score, level in (
+        ("canonical_concept", 100, "same_canonical_concept"),
+        ("candidate_class", 80, "same_candidate_class"),
+        ("region_family", 60, "same_region_family"),
+        ("content_domain", 40, "same_content_domain"),
+        ("style_domain", 30, "same_style_domain"),
+    ):
+        target_value = str(target_raw.get(key) or "").strip().lower()
+        donor_value = str(donor_raw.get(key) or "").strip().lower()
+        if target_value and donor_value and target_value == donor_value:
+            return {"score": score, "match_level": level, "good_pair": level in GOOD_PAIR_MATCH_LEVELS}
+    target_words = set(
+        " ".join(str(target_raw.get(key) or "").lower() for key in ("canonical_concept", "candidate_class", "region_family", "content_domain")).split()
+    )
+    donor_words = set(
+        " ".join(str(donor_raw.get(key) or "").lower() for key in ("canonical_concept", "candidate_class", "region_family", "content_domain")).split()
+    )
+    if target_words and donor_words and target_words.intersection(donor_words):
+        return {"score": 15, "match_level": "similar_text_overlap", "good_pair": False}
+    return {"score": 1, "match_level": "weak_cross_category", "good_pair": False}
+
+
+def _candidate_by_track_id(selection: Any, track_id: str | None) -> Any | None:
+    if not track_id:
+        return None
+    for item in selection.candidates:
+        if item.metrics is not None and str(item.track_id) == str(track_id):
+            return item
+    return None
+
+
+def _mask_not_small(track: Any | None, operation: str | None, config: Mapping[str, Any]) -> bool:
+    if track is None or getattr(track, "metrics", None) is None:
+        return False
+    return bool(_operation_gate_report(track, operation, config)["pass"])
+
+
 def _eligible_person_targets(selection: Any, config: Mapping[str, Any]) -> list[Any]:
     candidates = [item for item in selection.candidates if item.metrics is not None and _is_person_track(item)]
     return [item for item in candidates if _operation_gate_report(item, "person_appearance_swap", config)["pass"]]
 
 
-def _force_bbox_policy(case_payload: Dict[str, Any], *, reason: str, bbox_expand_ratio: float) -> None:
-    meta = case_payload.setdefault("sampling_meta", {})
-    policy = dict(meta.get("mask_policy") or {})
-    if policy.get("person_bbox_disabled") or case_payload.get("operation") == "person_appearance_swap":
-        return
-    policy["variant_type"] = "expanded_bbox"
-    policy["bbox_expand_ratio"] = float(bbox_expand_ratio)
-    policy["dilation_radius_px"] = max(16, int(policy.get("dilation_radius_px") or 0))
-    policy["trigger_reason"] = reason
-    policy["shape_bias_mitigation"] = True
-    meta["mask_policy"] = policy
+def _base_pair_keep_case(
+    *,
+    case: Any,
+    selection: Any,
+    config: Mapping[str, Any],
+) -> tuple[Dict[str, Any] | None, Dict[str, Any]]:
+    target = _candidate_by_track_id(selection, case.target.track_id)
+    gate = _operation_gate_report(target, case.operation, config) if target is not None else {"pass": False, "failures": ["missing_usable_target_track"]}
+    pair = _simple_pair_match(target or case.target, case.donor)
+    is_person_swap = case.operation == "person_appearance_swap"
+    text_route_keep = case.generator_route != REFERENCE_ROUTE and target is not None and bool(gate["pass"])
+    reference_keep = (
+        case.generator_route == REFERENCE_ROUTE
+        and target is not None
+        and case.donor is not None
+        and bool(gate["pass"])
+        and (bool(pair["good_pair"]) or is_person_swap)
+    )
+    keep = bool(reference_keep or text_route_keep)
+    reason = {
+        "case_id": case.case_id,
+        "video_id": case.target.video_id,
+        "operation": case.operation,
+        "generator_route": case.generator_route,
+        "target_track_id": case.target.track_id,
+        "donor_track_id": None if case.donor is None else case.donor.track_id,
+        "target_kind": _track_kind(target or case.target),
+        "donor_kind": _track_kind(case.donor),
+        "pair_match": pair,
+        "operation_gate": gate,
+        "keep": keep,
+        "reason": "keep_person_swap_or_good_pair" if keep else "needs_qwen_sam3_rerun_and_repair",
+    }
+    if not keep:
+        return None, reason
+    payload = _case_from_template(
+        case,
+        target,
+        config,
+        operation=case.operation,
+        generator_route=case.generator_route,
+        donor=case.donor,
+        quality_tier="continuation_keep_person_swap" if is_person_swap else "continuation_keep_good_pair",
+        risk_tags=["continuation_keep_existing_pair"],
+        donor_repair=None,
+        operation_repair=None,
+        target_repair=None,
+    )
+    if payload is None:
+        reason["keep"] = False
+        reason["reason"] = "keepable_case_build_failed"
+        return None, reason
+    _add_continuation_meta(payload, base_case=case, strategy="keep_person_swap" if is_person_swap else "keep_good_base_pair")
+    return payload, reason
 
 
 def _add_continuation_meta(
@@ -315,46 +425,32 @@ def _continuation_case_from_base(
     if person_case is not None:
         return person_case, None
 
-    selected, operation, route, donor, quality_tier, risk_tags, donor_repair, operation_repair, target_repair = _select_case_target(
-        case, selection, config, donor_pool
-    )
-    if selected is None:
-        return None, {
-            "case_id": case.case_id,
-            "video_id": case.target.video_id,
-            "reason": "no_continuation_target_or_donor",
-            "person_preference_skip": person_skip,
-        }
-    case_payload = _case_from_template(
-        case,
-        selected,
-        config,
-        operation=operation,
-        generator_route=route,
-        donor=donor,
-        quality_tier=quality_tier,
-        risk_tags=[*risk_tags, "continuation_remaining_case"],
-        donor_repair=donor_repair,
-        operation_repair=operation_repair,
-        target_repair=target_repair,
-    )
-    if case_payload is None:
-        return None, {
-            "case_id": case.case_id,
-            "video_id": case.target.video_id,
-            "reason": "continuation_case_build_failed",
-            "person_preference_skip": person_skip,
-        }
-    _add_continuation_meta(case_payload, base_case=case, strategy="operation_aware_remaining")
+    keep_case, keep_reason = _base_pair_keep_case(case=case, selection=selection, config=config)
+    if keep_case is not None:
+        return keep_case, None
 
-    if operation != "person_appearance_swap" and quality_tier == "area_gate_fallback_largest":
-        _force_bbox_policy(case_payload, reason="small_target_no_better_candidate", bbox_expand_ratio=1.35)
-    if operation != "person_appearance_swap" and route == REFERENCE_ROUTE and donor is not None:
-        target_kind = _track_kind(selected)
-        donor_kind = _track_kind(donor)
-        if target_kind != donor_kind:
-            _force_bbox_policy(case_payload, reason="target_donor_shape_mismatch", bbox_expand_ratio=1.25)
-    return case_payload, None
+    keep_reason["person_preference_skip"] = person_skip
+    return None, keep_reason
+
+
+def _case_index_row(case_payload: Mapping[str, Any]) -> Dict[str, Any]:
+    target = case_payload.get("target") or {}
+    donor = case_payload.get("donor") or {}
+    meta = case_payload.get("sampling_meta") or {}
+    continuation = meta.get("continuation") or {}
+    mask_policy = meta.get("mask_policy") or {}
+    return {
+        "case_id": case_payload.get("case_id"),
+        "video_id": target.get("video_id") if isinstance(target, Mapping) else None,
+        "operation": case_payload.get("operation"),
+        "generator_route": case_payload.get("generator_route"),
+        "target_track_id": target.get("track_id") if isinstance(target, Mapping) else None,
+        "donor_track_id": donor.get("track_id") if isinstance(donor, Mapping) else None,
+        "continuation_strategy": continuation.get("strategy") if isinstance(continuation, Mapping) else None,
+        "base_case_id": continuation.get("base_case_id") if isinstance(continuation, Mapping) else None,
+        "mask_variant_type": mask_policy.get("variant_type") if isinstance(mask_policy, Mapping) else None,
+        "mask_trigger_reason": mask_policy.get("trigger_reason") if isinstance(mask_policy, Mapping) else None,
+    }
 
 
 def build_continuation_plan(
@@ -368,6 +464,7 @@ def build_continuation_plan(
     out_vace14b_plan: Path = DEFAULT_OUT_VACE14B_PLAN,
     out_vace13b_plan: Path = DEFAULT_OUT_VACE13B_PLAN,
     out_audit: Path = DEFAULT_OUT_AUDIT,
+    out_rerun_manifest: Path = DEFAULT_OUT_RERUN_MANIFEST,
     ffprobe_bin: str = "ffprobe",
     num_workers: int = 1,
     progress_every: int = 0,
@@ -394,6 +491,7 @@ def build_continuation_plan(
 
     cases: list[Dict[str, Any]] = []
     skipped: list[Dict[str, Any]] = []
+    rerun_candidates: list[Dict[str, Any]] = []
     used_videos: set[str] = set()
     for case in base_cases:
         video_id = case.target.video_id
@@ -417,7 +515,9 @@ def build_continuation_plan(
             continue
         new_case, skip = _continuation_case_from_base(case=case, selection=selection, config=config, donor_pool=donor_pool)
         if new_case is None:
-            skipped.append(skip or {"case_id": case.case_id, "video_id": video_id, "reason": "continuation_case_failed"})
+            rerun = skip or {"case_id": case.case_id, "video_id": video_id, "reason": "continuation_case_failed"}
+            rerun_candidates.append(rerun)
+            skipped.append(rerun)
             continue
         new_video_id = str((new_case.get("target") or {}).get("video_id") or video_id)
         if new_video_id in used_videos or new_video_id in completed_video_ids:
@@ -440,6 +540,10 @@ def build_continuation_plan(
     summary["completed_video_count"] = len(completed_video_ids)
     summary["continuation_operation_counts"] = dict(Counter(str(case.get("operation") or "<missing>") for case in cases))
     summary["continuation_model_counts"] = dict(Counter(_case_model_name(case) for case in cases))
+    summary["qwen_sam3_rerun_candidate_count"] = len(rerun_candidates)
+    summary["qwen_sam3_rerun_reason_counts"] = dict(Counter(str(item.get("reason") or "<missing>") for item in rerun_candidates))
+    kept_cases = [_case_index_row(case) for case in cases]
+    kept_video_ids = sorted({str(item["video_id"]) for item in kept_cases if item.get("video_id")})
 
     payload = _plan_payload(
         schema_version="dataA_v1_frozen_subject_first_vace_continuation_plan_v1",
@@ -483,20 +587,53 @@ def build_continuation_plan(
         "vace14b_validation": vace14b_validation,
         "vace13b_validation": vace13b_validation,
         "skipped": skipped,
+        "qwen_sam3_rerun_candidates": rerun_candidates,
+        "kept_cases": kept_cases,
         "completed": [completed_case.__dict__ for completed_case in completed.values()],
         "candidate_count": len(audit_rows),
+    }
+    rerun_manifest = {
+        "schema_version": "dataA_v1_qwen_sam3_rerun_manifest_v1",
+        "generated_at_utc": utc_now_iso(),
+        "track_bank": str(track_bank),
+        "base_plan": str(base_plan),
+        "run_roots": [str(path) for path in run_roots],
+        "policy": {
+            "completed_cases_are_excluded": True,
+            "keep_if_person_swap": True,
+            "keep_if_good_pair_and_mask_not_small": True,
+            "rerun_other_unfinished_cases": True,
+            "rerun_scope": "unfinished_cases_only",
+        },
+        "summary": {
+            "rerun_candidate_count": len(rerun_candidates),
+            "rerun_video_count": len({str(item.get("video_id")) for item in rerun_candidates if item.get("video_id")}),
+            "kept_case_count": len(kept_cases),
+            "kept_video_count": len(kept_video_ids),
+            "completed_case_count": len(completed_case_ids),
+            "completed_video_count": len(completed_video_ids),
+            "reason_counts": dict(Counter(str(item.get("reason") or "<missing>") for item in rerun_candidates)),
+        },
+        "completed_case_ids": sorted(completed_case_ids),
+        "completed_video_ids": sorted(completed_video_ids),
+        "kept_cases": kept_cases,
+        "kept_video_ids": kept_video_ids,
+        "rerun_candidates": rerun_candidates,
+        "rerun_video_ids": sorted({str(item.get("video_id")) for item in rerun_candidates if item.get("video_id")}),
     }
     if not dry_run:
         write_json(out_plan, payload)
         write_json(out_vace14b_plan, vace14b_payload)
         write_json(out_vace13b_plan, vace13b_payload)
         write_json(out_audit, audit)
+        write_json(out_rerun_manifest, rerun_manifest)
     return {
         "dry_run": dry_run,
         "out_plan": str(out_plan),
         "out_vace14b_plan": str(out_vace14b_plan),
         "out_vace13b_plan": str(out_vace13b_plan),
         "out_audit": str(out_audit),
+        "out_rerun_manifest": str(out_rerun_manifest),
         "summary": summary,
         "validation": validation,
         "vace14b_validation": vace14b_validation,
@@ -516,6 +653,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--out-vace14b-plan", type=Path, default=DEFAULT_OUT_VACE14B_PLAN)
     parser.add_argument("--out-vace13b-plan", type=Path, default=DEFAULT_OUT_VACE13B_PLAN)
     parser.add_argument("--out-audit", type=Path, default=DEFAULT_OUT_AUDIT)
+    parser.add_argument("--out-rerun-manifest", type=Path, default=DEFAULT_OUT_RERUN_MANIFEST)
     parser.add_argument("--ffprobe-bin", default="ffprobe")
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--progress-every", type=int, default=0)
@@ -536,6 +674,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             out_vace14b_plan=_resolve_project_path(args.out_vace14b_plan) or args.out_vace14b_plan,
             out_vace13b_plan=_resolve_project_path(args.out_vace13b_plan) or args.out_vace13b_plan,
             out_audit=_resolve_project_path(args.out_audit) or args.out_audit,
+            out_rerun_manifest=_resolve_project_path(args.out_rerun_manifest) or args.out_rerun_manifest,
             ffprobe_bin=args.ffprobe_bin,
             num_workers=max(1, int(args.num_workers)),
             progress_every=max(0, int(args.progress_every)),
@@ -553,6 +692,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"completed_cases={summary['summary']['completed_case_count']} "
         f"completed_videos={summary['summary']['completed_video_count']} "
         f"skipped={summary['skipped_count']} "
+        f"rerun_candidates={summary['summary']['qwen_sam3_rerun_candidate_count']} "
         f"valid={summary['validation']['valid']}"
     )
     if not summary["validation"]["valid"]:
