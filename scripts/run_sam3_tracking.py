@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import argparse
 import sys
 import time
 import traceback
@@ -21,7 +22,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
+
+try:
+    import torch
+except ImportError:
+    torch = None
 
 try:
     import cv2
@@ -57,9 +62,7 @@ from configs.sam3_tracking_config import (
     SAM3_TRACKS_ALL_PATH,
 )
 
-if str(SAM3_SOURCE_ROOT) not in sys.path:
-    sys.path.insert(0, str(SAM3_SOURCE_ROOT))
-from sam3.model_builder import build_sam3_video_predictor
+build_sam3_video_predictor = None
 
 
 REQUIRED_CANDIDATE_FIELDS = {
@@ -90,7 +93,7 @@ def atomic_write_json(path: Path, payload: Any) -> None:
 def to_numpy(value: Any) -> np.ndarray:
     if value is None:
         return np.asarray([])
-    if isinstance(value, torch.Tensor):
+    if torch is not None and isinstance(value, torch.Tensor):
         return value.detach().cpu().numpy()
     return np.asarray(value)
 
@@ -122,7 +125,7 @@ def touches_border(mask: np.ndarray) -> bool:
 
 
 def gpu_memory_snapshot() -> dict[str, int] | None:
-    if not torch.cuda.is_available():
+    if torch is None or not torch.cuda.is_available():
         return None
     device = torch.cuda.current_device()
     return {
@@ -201,10 +204,18 @@ def load_input() -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
 class Sam3Runner:
     def __init__(self) -> None:
+        global build_sam3_video_predictor
         if not SAM3_SOURCE_ROOT.is_dir() or not SAM3_CHECKPOINT_PATH.is_file():
             raise FileNotFoundError("SAM3 source directory or checkpoint is unavailable")
+        if torch is None:
+            raise RuntimeError("PyTorch is required for SAM3")
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is required for SAM3")
+        if build_sam3_video_predictor is None:
+            if str(SAM3_SOURCE_ROOT) not in sys.path:
+                sys.path.insert(0, str(SAM3_SOURCE_ROOT))
+            from sam3.model_builder import build_sam3_video_predictor as builder
+            build_sam3_video_predictor = builder
         self.predictor = build_sam3_video_predictor(
             checkpoint_path=str(SAM3_CHECKPOINT_PATH),
             gpus_to_use=[0],
@@ -525,7 +536,46 @@ def write_outputs(dataset: dict[str, Any], input_videos: list[dict[str, Any]], r
     })
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run SAM3 tracking from Qwen candidate JSON.")
+    parser.add_argument("--qwen-candidates", type=Path, default=None)
+    parser.add_argument("--out-root", type=Path, default=None)
+    parser.add_argument("--mask-root", type=Path, default=None)
+    parser.add_argument("--max-videos", type=int, default=None)
+    parser.add_argument("--all-videos", action="store_true")
+    parser.add_argument("--max-candidates-per-video", type=int, default=None)
+    return parser.parse_args()
+
+
+def configure_runtime(args: argparse.Namespace) -> None:
+    global QWEN_SAM3_CANDIDATES_PATH, SAM3_TRACKS_ALL_PATH, SAM3_QUALITY_TRACKS_PATH
+    global SAM3_FAILURES_PATH, SAM3_RUN_SUMMARY_PATH, SAM3_TRACK_MASK_ROOT
+    global SAM3_MAX_VIDEOS, SAM3_MAX_CANDIDATES_PER_VIDEO
+
+    if args.qwen_candidates is not None:
+        QWEN_SAM3_CANDIDATES_PATH = Path(args.qwen_candidates)
+    if args.out_root is not None:
+        out_root = Path(args.out_root)
+        SAM3_TRACKS_ALL_PATH = out_root / "sam3_tracks_all.json"
+        SAM3_QUALITY_TRACKS_PATH = out_root / "sam3_quality_tracks.json"
+        SAM3_FAILURES_PATH = out_root / "sam3_failures.json"
+        SAM3_RUN_SUMMARY_PATH = out_root / "sam3_run_summary.json"
+    if args.mask_root is not None:
+        SAM3_TRACK_MASK_ROOT = Path(args.mask_root)
+    if args.all_videos:
+        SAM3_MAX_VIDEOS = None
+    elif args.max_videos is not None:
+        if args.max_videos < 0:
+            raise ValueError("--max-videos must be non-negative")
+        SAM3_MAX_VIDEOS = int(args.max_videos)
+    if args.max_candidates_per_video is not None:
+        if args.max_candidates_per_video <= 0:
+            raise ValueError("--max-candidates-per-video must be positive")
+        SAM3_MAX_CANDIDATES_PER_VIDEO = int(args.max_candidates_per_video)
+
+
 def main() -> None:
+    configure_runtime(parse_args())
     started = time.perf_counter()
     dataset, videos = load_input()
     if SAM3_MAX_VIDEOS is not None:

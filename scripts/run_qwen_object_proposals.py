@@ -9,6 +9,7 @@ editing operation. Source MP4s stay in /tmp; all outputs are unified JSON files.
 from __future__ import annotations
 
 import asyncio
+import argparse
 import json
 import random
 import sys
@@ -51,6 +52,9 @@ from configs.object_proposal_config import (
 )
 
 SCHEMA_VERSION = "qwen_region_candidates_v4"
+DEFAULT_MAX_SAM3_CANDIDATES = MAX_SAM3_CANDIDATES
+DEFAULT_MAX_DEFERRED_CANDIDATES = MAX_DEFERRED_CANDIDATES
+PROMPT_PROFILE = "default"
 
 ALLOWED_SAM3_FAMILIES = {"physical_instance", "editable_surface"}
 ALLOWED_TARGET_SCOPES = {"whole_instance", "whole_surface"}
@@ -202,6 +206,40 @@ main candidate; otherwise use null.
 Return JSON only. Do not include Markdown or explanations outside JSON.
 """
 
+BASE_OBJECT_PROPOSAL_PROMPT = OBJECT_PROPOSAL_PROMPT
+SUBJECT_FIRST_RERUN_APPENDIX = """
+
+SUBJECT-FIRST RECOVERY RERUN MODE
+
+This run is only for videos whose previous candidates were not suitable for
+local AIGC editing. Prefer candidates that can create visible full-video fake
+evidence after mask-based editing.
+
+Priority order:
+1) Independently bounded visible people that are not tiny. Include a person even
+   if the previous run focused on a nearby object.
+2) Large foreground movable objects such as bags, vehicles, furniture, tools,
+   balls, instruments, appliances, or packages.
+3) Whole editable carrier surfaces such as screens, posters, signs, books,
+   paper, maps, framed art, apparel panels, vehicle panels, or package fronts.
+
+Avoid tiny details, body parts, text glyphs, logos, groups, unbounded background
+regions, and ambiguous generic prompts. Use short disambiguated SAM prompts for
+multiple similar instances.
+"""
+
+
+def build_object_proposal_prompt(profile: str) -> str:
+    prompt = BASE_OBJECT_PROPOSAL_PROMPT.replace(
+        f"Return at most {DEFAULT_MAX_SAM3_CANDIDATES} `sam3_candidates` and at most\n"
+        f"{DEFAULT_MAX_DEFERRED_CANDIDATES} `deferred_candidates`.",
+        f"Return at most {MAX_SAM3_CANDIDATES} `sam3_candidates` and at most\n"
+        f"{MAX_DEFERRED_CANDIDATES} `deferred_candidates`.",
+    )
+    if profile == "subject_first_rerun":
+        prompt += SUBJECT_FIRST_RERUN_APPENDIX
+    return prompt
+
 
 def schema_object(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {
@@ -212,58 +250,62 @@ def schema_object(properties: dict[str, Any], required: list[str]) -> dict[str, 
     }
 
 
-JSON_SCHEMA: dict[str, Any] = schema_object(
-    {
-        "schema_version": {"type": "string", "enum": [SCHEMA_VERSION]},
-        "sam3_candidates": {
-            "type": "array",
-            "maxItems": MAX_SAM3_CANDIDATES,
-            "items": schema_object(
-                {
-                    "candidate_id": {"type": "string"},
-                    "region_family": {"type": "string", "enum": sorted(ALLOWED_SAM3_FAMILIES)},
-                    "candidate_class": {"type": "string", "enum": sorted(ALLOWED_CANDIDATE_CLASSES)},
-                    "target_scope": {"type": "string", "enum": sorted(ALLOWED_TARGET_SCOPES)},
-                    "canonical_concept": {"type": "string"},
-                    "display_phrase": {"type": "string"},
-                    "sam_prompt": {"type": "string"},
-                    "instance_count_hint": {"type": "string", "enum": sorted(ALLOWED_INSTANCE_COUNT_HINTS)},
-                    "visual_disambiguators": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
-                    "screen_region": {"type": "string", "enum": sorted(ALLOWED_SCREEN_REGIONS)},
-                    "temporal_presence": {"type": "string", "enum": sorted(ALLOWED_PRESENCE)},
-                },
-                [
-                    "candidate_id", "region_family", "candidate_class", "target_scope",
-                    "canonical_concept", "display_phrase", "sam_prompt",
-                    "instance_count_hint", "visual_disambiguators", "screen_region",
-                    "temporal_presence",
-                ],
-            ),
+def build_json_schema() -> dict[str, Any]:
+    return schema_object(
+        {
+            "schema_version": {"type": "string", "enum": [SCHEMA_VERSION]},
+            "sam3_candidates": {
+                "type": "array",
+                "maxItems": MAX_SAM3_CANDIDATES,
+                "items": schema_object(
+                    {
+                        "candidate_id": {"type": "string"},
+                        "region_family": {"type": "string", "enum": sorted(ALLOWED_SAM3_FAMILIES)},
+                        "candidate_class": {"type": "string", "enum": sorted(ALLOWED_CANDIDATE_CLASSES)},
+                        "target_scope": {"type": "string", "enum": sorted(ALLOWED_TARGET_SCOPES)},
+                        "canonical_concept": {"type": "string"},
+                        "display_phrase": {"type": "string"},
+                        "sam_prompt": {"type": "string"},
+                        "instance_count_hint": {"type": "string", "enum": sorted(ALLOWED_INSTANCE_COUNT_HINTS)},
+                        "visual_disambiguators": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+                        "screen_region": {"type": "string", "enum": sorted(ALLOWED_SCREEN_REGIONS)},
+                        "temporal_presence": {"type": "string", "enum": sorted(ALLOWED_PRESENCE)},
+                    },
+                    [
+                        "candidate_id", "region_family", "candidate_class", "target_scope",
+                        "canonical_concept", "display_phrase", "sam_prompt",
+                        "instance_count_hint", "visual_disambiguators", "screen_region",
+                        "temporal_presence",
+                    ],
+                ),
+            },
+            "deferred_candidates": {
+                "type": "array",
+                "maxItems": MAX_DEFERRED_CANDIDATES,
+                "items": schema_object(
+                    {
+                        "candidate_id": {"type": "string"},
+                        "region_family": {"type": "string", "enum": sorted(ALLOWED_DEFERRED_FAMILIES)},
+                        "display_phrase": {"type": "string"},
+                        "parent_candidate_id": {"type": ["string", "null"]},
+                        "screen_region": {"type": "string", "enum": sorted(ALLOWED_SCREEN_REGIONS)},
+                        "temporal_presence": {"type": "string", "enum": sorted(ALLOWED_PRESENCE)},
+                        "deferred_reason": {"type": "string", "enum": sorted(ALLOWED_DEFERRED_REASONS)},
+                    },
+                    [
+                        "candidate_id", "region_family", "display_phrase",
+                        "parent_candidate_id", "screen_region", "temporal_presence",
+                        "deferred_reason",
+                    ],
+                ),
+            },
+            "no_sam3_candidate_reason": {"type": ["string", "null"]},
         },
-        "deferred_candidates": {
-            "type": "array",
-            "maxItems": MAX_DEFERRED_CANDIDATES,
-            "items": schema_object(
-                {
-                    "candidate_id": {"type": "string"},
-                    "region_family": {"type": "string", "enum": sorted(ALLOWED_DEFERRED_FAMILIES)},
-                    "display_phrase": {"type": "string"},
-                    "parent_candidate_id": {"type": ["string", "null"]},
-                    "screen_region": {"type": "string", "enum": sorted(ALLOWED_SCREEN_REGIONS)},
-                    "temporal_presence": {"type": "string", "enum": sorted(ALLOWED_PRESENCE)},
-                    "deferred_reason": {"type": "string", "enum": sorted(ALLOWED_DEFERRED_REASONS)},
-                },
-                [
-                    "candidate_id", "region_family", "display_phrase",
-                    "parent_candidate_id", "screen_region", "temporal_presence",
-                    "deferred_reason",
-                ],
-            ),
-        },
-        "no_sam3_candidate_reason": {"type": ["string", "null"]},
-    },
-    ["schema_version", "sam3_candidates", "deferred_candidates", "no_sam3_candidate_reason"],
-)
+        ["schema_version", "sam3_candidates", "deferred_candidates", "no_sam3_candidate_reason"],
+    )
+
+
+JSON_SCHEMA: dict[str, Any] = build_json_schema()
 
 
 class ProposalError(RuntimeError):
@@ -769,9 +811,11 @@ def build_summary(started_at: str, started_perf: float, manifest_total: int, que
             "api_base": QWEN_API_BASE,
             "model": QWEN_MODEL_NAME,
             "max_concurrency": MAX_CONCURRENCY,
+            "max_output_tokens": MAX_OUTPUT_TOKENS,
             "max_retries": MAX_RETRIES,
             "max_sam3_candidates": MAX_SAM3_CANDIDATES,
             "max_deferred_candidates": MAX_DEFERRED_CANDIDATES,
+            "prompt_profile": PROMPT_PROFILE,
             "json_schema_enabled": ENABLE_JSON_SCHEMA,
             "max_videos": MAX_VIDEOS,
         },
@@ -832,6 +876,78 @@ def select_tasks(manifest_videos: list[dict[str, Any]], store: UnifiedStore) -> 
     return to_process, skipped, missing_files
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run Qwen3-VL object proposal discovery.")
+    parser.add_argument("--manifest", type=Path, default=None, help="Override video manifest path.")
+    parser.add_argument("--out-root", type=Path, default=None, help="Override Qwen output directory.")
+    parser.add_argument("--api-base", default=None, help="Override OpenAI-compatible Qwen API base.")
+    parser.add_argument("--model-name", default=None, help="Override served Qwen model name.")
+    parser.add_argument("--max-concurrency", type=int, default=None)
+    parser.add_argument("--max-output-tokens", type=int, default=None)
+    parser.add_argument("--max-videos", type=int, default=None, help="Limit videos for this invocation.")
+    parser.add_argument("--all-videos", action="store_true", help="Process all videos from the manifest.")
+    parser.add_argument("--max-sam3-candidates", type=int, default=None)
+    parser.add_argument("--max-deferred-candidates", type=int, default=None)
+    parser.add_argument("--prompt-profile", choices=("default", "subject_first_rerun"), default="default")
+    parser.add_argument("--overwrite-existing", action="store_true")
+    parser.add_argument("--no-retry-failures", action="store_true")
+    return parser.parse_args()
+
+
+def configure_runtime(args: argparse.Namespace) -> None:
+    global MANIFEST_PATH, QWEN_API_BASE, QWEN_MODEL_NAME, MAX_CONCURRENCY
+    global MAX_OUTPUT_TOKENS, MAX_VIDEOS, MAX_SAM3_CANDIDATES, MAX_DEFERRED_CANDIDATES
+    global OVERWRITE_EXISTING, RETRY_FAILURE_RECORDS, PROMPT_PROFILE
+    global ALL_CANDIDATES_PATH, SAM3_CANDIDATES_PATH, SCENE_TEXT_GRAPHIC_PATH
+    global SCREEN_OVERLAY_PATH, PERSISTENT_WATERMARK_PATH, PARSER_REJECTIONS_PATH
+    global RUN_SUMMARY_PATH, OBJECT_PROPOSAL_PROMPT, JSON_SCHEMA
+
+    if args.manifest is not None:
+        MANIFEST_PATH = Path(args.manifest)
+    if args.out_root is not None:
+        out_root = Path(args.out_root)
+        ALL_CANDIDATES_PATH = out_root / "qwen_region_candidates_all.json"
+        SAM3_CANDIDATES_PATH = out_root / "qwen_sam3_candidates.json"
+        SCENE_TEXT_GRAPHIC_PATH = out_root / "qwen_deferred_scene_text_graphic.json"
+        SCREEN_OVERLAY_PATH = out_root / "qwen_deferred_screen_overlay.json"
+        PERSISTENT_WATERMARK_PATH = out_root / "qwen_deferred_persistent_watermark.json"
+        PARSER_REJECTIONS_PATH = out_root / "qwen_parser_rejections.json"
+        RUN_SUMMARY_PATH = out_root / "qwen_run_summary.json"
+    if args.api_base:
+        QWEN_API_BASE = str(args.api_base)
+    if args.model_name:
+        QWEN_MODEL_NAME = str(args.model_name)
+    if args.max_concurrency is not None:
+        if args.max_concurrency <= 0:
+            raise ValueError("--max-concurrency must be positive")
+        MAX_CONCURRENCY = int(args.max_concurrency)
+    if args.max_output_tokens is not None:
+        if args.max_output_tokens <= 0:
+            raise ValueError("--max-output-tokens must be positive")
+        MAX_OUTPUT_TOKENS = int(args.max_output_tokens)
+    if args.all_videos:
+        MAX_VIDEOS = None
+    elif args.max_videos is not None:
+        if args.max_videos < 0:
+            raise ValueError("--max-videos must be non-negative")
+        MAX_VIDEOS = int(args.max_videos)
+    if args.max_sam3_candidates is not None:
+        if args.max_sam3_candidates <= 0:
+            raise ValueError("--max-sam3-candidates must be positive")
+        MAX_SAM3_CANDIDATES = int(args.max_sam3_candidates)
+    if args.max_deferred_candidates is not None:
+        if args.max_deferred_candidates < 0:
+            raise ValueError("--max-deferred-candidates must be non-negative")
+        MAX_DEFERRED_CANDIDATES = int(args.max_deferred_candidates)
+    if args.overwrite_existing:
+        OVERWRITE_EXISTING = True
+    if args.no_retry_failures:
+        RETRY_FAILURE_RECORDS = False
+    PROMPT_PROFILE = str(args.prompt_profile)
+    OBJECT_PROPOSAL_PROMPT = build_object_proposal_prompt(PROMPT_PROFILE)
+    JSON_SCHEMA = build_json_schema()
+
+
 async def run() -> None:
     manifest_videos = load_manifest()
     existing = default_dataset()
@@ -880,6 +996,8 @@ async def run() -> None:
 
 
 def main() -> None:
+    args = parse_args()
+    configure_runtime(args)
     try:
         asyncio.run(run())
     except KeyboardInterrupt:

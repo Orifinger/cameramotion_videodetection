@@ -9,6 +9,7 @@ from scripts.dataa_v1.build_continuation_execution_plan import build_continuatio
 from scripts.dataa_v1.build_subject_first_execution_plan import _is_person_track
 from scripts.dataa_v1.common import read_json, write_json
 from scripts.dataa_v1.execution_plan import load_execution_plan
+from scripts.dataa_v1.build_rerun_video_manifest import build_rerun_video_manifest
 from scripts.dataa_v1.merge_sam3_track_banks import merge_track_banks
 from scripts.dataa_v1.schema import TrackRef
 from scripts.dataa_v1.subject_selection import (
@@ -495,6 +496,36 @@ def test_merge_sam3_track_banks_replaces_only_rerun_videos(tmp_path: Path) -> No
     assert manifest["replaced_video_ids"] == ["replace_video"]
     assert manifest["rerun_failed_video_ids"] == ["absent_video", "missing_video"]
     assert "ignored_video" not in {item["video_id"] for item in manifest["video_sources"]}
+
+
+def test_build_rerun_video_manifest_filters_requested_videos(tmp_path: Path) -> None:
+    base_manifest = tmp_path / "videos.json"
+    rerun_manifest = tmp_path / "rerun.json"
+    out_manifest = tmp_path / "rerun_videos.json"
+    write_json(
+        base_manifest,
+        {
+            "schema_version": "cambench_video_manifest_v1",
+            "video_root": "/tmp/videos",
+            "videos": [
+                {"video_id": "v1", "relative_path": "a.mp4", "video_path": "/tmp/videos/a.mp4"},
+                {"video_id": "v2", "relative_path": "b.mp4", "video_path": "/tmp/videos/b.mp4"},
+                {"video_id": "v3", "relative_path": "c.mp4", "video_path": "/tmp/videos/c.mp4"},
+            ],
+        },
+    )
+    write_json(rerun_manifest, {"rerun_video_ids": ["v3", "v1"]})
+
+    result = build_rerun_video_manifest(
+        base_video_manifest=base_manifest,
+        rerun_manifest=rerun_manifest,
+        out_manifest=out_manifest,
+    )
+
+    assert result["selected_video_count"] == 2
+    payload = read_json(out_manifest)
+    assert payload["rerun_policy"]["no_auto_second_rerun"] is True
+    assert [video["video_id"] for video in payload["videos"]] == ["v1", "v3"]
 
 
 def test_track_label_helpers_accept_trackref() -> None:

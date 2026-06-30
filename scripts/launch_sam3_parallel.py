@@ -58,6 +58,10 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=SAM3_WORKER_STARTUP_WAVE_DELAY_SEC,
     )
+    parser.add_argument("--qwen-candidates", type=Path, default=None)
+    parser.add_argument("--out-root", type=Path, default=None)
+    parser.add_argument("--mask-root", type=Path, default=None)
+    parser.add_argument("--max-candidates-per-video", type=int, default=None)
     return parser.parse_args()
 
 
@@ -68,10 +72,13 @@ def main() -> None:
         raise ValueError("workers-per-gpu must be positive")
     if args.startup_wave_delay_sec < 0:
         raise ValueError("startup-wave-delay-sec must be non-negative")
+    if args.max_candidates_per_video is not None and args.max_candidates_per_video <= 0:
+        raise ValueError("--max-candidates-per-video must be positive")
 
     run_id = args.run_id or default_run_id()
     num_workers = len(gpu_ids) * args.workers_per_gpu
-    run_root = Path(SAM3_PARALLEL_RUN_ROOT) / run_id
+    parallel_root = Path(args.out_root) / "parallel_runs" if args.out_root is not None else Path(SAM3_PARALLEL_RUN_ROOT)
+    run_root = parallel_root / run_id
     logs_root = run_root / "logs"
     logs_root.mkdir(parents=True, exist_ok=True)
 
@@ -105,6 +112,14 @@ def main() -> None:
                 "--num-workers", str(num_workers),
                 "--physical-gpu-id", str(gpu_id),
             ]
+            if args.qwen_candidates is not None:
+                command.extend(["--qwen-candidates", str(args.qwen_candidates)])
+            if args.out_root is not None:
+                command.extend(["--out-root", str(args.out_root)])
+            if args.mask_root is not None:
+                command.extend(["--mask-root", str(args.mask_root)])
+            if args.max_candidates_per_video is not None:
+                command.extend(["--max-candidates-per-video", str(args.max_candidates_per_video)])
             process = subprocess.Popen(command, cwd=str(PROJECT_ROOT), env=env, stdout=handle, stderr=subprocess.STDOUT)
             processes.append((worker_index, gpu_id, log_path, process, handle))
             print(f"[launch] worker={worker_index:03d} gpu={gpu_id} slot={slot} log={log_path}", flush=True)
@@ -130,6 +145,10 @@ def main() -> None:
             "--run-id", run_id,
             "--num-workers", str(num_workers),
         ]
+        if args.qwen_candidates is not None:
+            merge_command.extend(["--qwen-candidates", str(args.qwen_candidates)])
+        if args.out_root is not None:
+            merge_command.extend(["--out-root", str(args.out_root)])
         print("[launch] all workers clean; merging canonical track bank", flush=True)
         subprocess.run(merge_command, cwd=str(PROJECT_ROOT), check=True)
         print(f"[launch] complete run_id={run_id}", flush=True)

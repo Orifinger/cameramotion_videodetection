@@ -46,6 +46,8 @@ def parse() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--num-workers", required=True, type=int)
+    parser.add_argument("--qwen-candidates", type=Path, default=None)
+    parser.add_argument("--out-root", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -74,7 +76,15 @@ def collect_quality(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def main() -> None:
     args = parse()
-    qwen = read(Path(QWEN_SAM3_CANDIDATES_PATH))
+    qwen_candidates_path = Path(args.qwen_candidates) if args.qwen_candidates is not None else Path(QWEN_SAM3_CANDIDATES_PATH)
+    out_root = Path(args.out_root) if args.out_root is not None else None
+    parallel_run_root = out_root / "parallel_runs" if out_root is not None else Path(SAM3_PARALLEL_RUN_ROOT)
+    tracks_all_path = out_root / "sam3_tracks_all.json" if out_root is not None else Path(SAM3_TRACKS_ALL_PATH)
+    quality_tracks_path = out_root / "sam3_quality_tracks.json" if out_root is not None else Path(SAM3_QUALITY_TRACKS_PATH)
+    failures_path = out_root / "sam3_failures.json" if out_root is not None else Path(SAM3_FAILURES_PATH)
+    summary_path = out_root / "sam3_run_summary.json" if out_root is not None else Path(SAM3_RUN_SUMMARY_PATH)
+
+    qwen = read(qwen_candidates_path)
     if not isinstance(qwen, dict) or qwen.get("schema_version") != QWEN_INPUT_SCHEMA_VERSION:
         raise ValueError("Qwen v4 candidate input is invalid")
     input_videos = qwen.get("videos")
@@ -82,7 +92,7 @@ def main() -> None:
         raise ValueError("Qwen candidate input has no videos list")
     expected_ids = [str(item["video_id"]) for item in input_videos if isinstance(item, dict) and item.get("video_id")]
 
-    worker_root = Path(SAM3_PARALLEL_RUN_ROOT) / args.run_id / "workers"
+    worker_root = parallel_run_root / args.run_id / "workers"
     by_video: dict[str, dict[str, Any]] = {}
     shard_info: list[dict[str, Any]] = []
     missing_shards: list[str] = []
@@ -139,7 +149,7 @@ def main() -> None:
         "schema_version": SAM3_SCHEMA_VERSION,
         "created_at_utc": timestamp(),
         "run_id": args.run_id,
-        "input_file": str(QWEN_SAM3_CANDIDATES_PATH),
+        "input_file": str(qwen_candidates_path),
         "input_video_records": len(expected_ids),
         "processed_videos": len(results),
         "parallel_worker_count": args.num_workers,
@@ -148,27 +158,27 @@ def main() -> None:
         "candidate_status_totals": dict(candidate_totals),
         "track_totals": {"all_tracks": all_tracks, "quality_pass_tracks": len(quality)},
     }
-    write(Path(SAM3_TRACKS_ALL_PATH), {
+    write(tracks_all_path, {
         "schema_version": SAM3_SCHEMA_VERSION,
         "created_at_utc": timestamp(),
         "run_id": args.run_id,
-        "input_file": str(QWEN_SAM3_CANDIDATES_PATH),
+        "input_file": str(qwen_candidates_path),
         "worker_shards": shard_info,
         "videos": results,
     })
-    write(Path(SAM3_QUALITY_TRACKS_PATH), {
+    write(quality_tracks_path, {
         "schema_version": SAM3_SCHEMA_VERSION,
         "created_at_utc": timestamp(),
         "run_id": args.run_id,
         "tracks": quality,
     })
-    write(Path(SAM3_FAILURES_PATH), {
+    write(failures_path, {
         "schema_version": SAM3_SCHEMA_VERSION,
         "created_at_utc": timestamp(),
         "run_id": args.run_id,
         "failures": failures,
     })
-    write(Path(SAM3_RUN_SUMMARY_PATH), summary)
+    write(summary_path, summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

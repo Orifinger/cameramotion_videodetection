@@ -100,6 +100,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-index", required=True, type=int)
     parser.add_argument("--num-workers", required=True, type=int)
     parser.add_argument("--physical-gpu-id", required=True)
+    parser.add_argument("--qwen-candidates", type=Path, default=None)
+    parser.add_argument("--out-root", type=Path, default=None)
+    parser.add_argument("--mask-root", type=Path, default=None)
+    parser.add_argument("--max-candidates-per-video", type=int, default=None)
     return parser.parse_args()
 
 
@@ -107,6 +111,12 @@ def main() -> None:
     args = parse_args()
     if args.worker_index < 0 or args.worker_index >= args.num_workers:
         raise ValueError("worker-index must be in [0, num-workers)")
+    if args.qwen_candidates is not None:
+        core.QWEN_SAM3_CANDIDATES_PATH = Path(args.qwen_candidates)
+    if args.max_candidates_per_video is not None:
+        if args.max_candidates_per_video <= 0:
+            raise ValueError("--max-candidates-per-video must be positive")
+        core.SAM3_MAX_CANDIDATES_PER_VIDEO = int(args.max_candidates_per_video)
 
     dataset, input_videos = core.load_input()
     assigned = [
@@ -114,7 +124,9 @@ def main() -> None:
         if index % args.num_workers == args.worker_index
     ]
 
-    run_root = Path(SAM3_PARALLEL_RUN_ROOT) / args.run_id
+    parallel_root = Path(args.out_root) / "parallel_runs" if args.out_root is not None else Path(SAM3_PARALLEL_RUN_ROOT)
+    mask_root = Path(args.mask_root) if args.mask_root is not None else Path(SAM3_TRACK_MASK_ROOT)
+    run_root = parallel_root / args.run_id
     worker_root = run_root / "workers"
     logs_root = run_root / "logs"
     worker_path = worker_root / f"worker_{args.worker_index:03d}_tracks.json"
@@ -124,7 +136,7 @@ def main() -> None:
     # Isolate mask assets between parallel runs and avoid collisions with earlier
     # single-worker smoke runs. Video shards are disjoint inside a given run.
     core.SAM3_TRACK_MASK_ROOT = (
-        Path(SAM3_TRACK_MASK_ROOT) / "parallel_runs" / args.run_id / f"worker_{args.worker_index:03d}"
+        mask_root / "parallel_runs" / args.run_id / f"worker_{args.worker_index:03d}"
     )
 
     existing = load_existing(worker_path)
