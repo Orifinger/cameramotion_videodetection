@@ -4,15 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.dataa_v1.common import DataAError, utc_now_iso, write_json
+from scripts.dataa_v1.common import DataAError, read_json, utc_now_iso, write_json
 from scripts.dataa_v1.config import apply_cli_overrides, load_config
 from scripts.dataa_v1.execution_plan import (
     MissingFrozenFullExecutionPlan,
@@ -56,6 +58,130 @@ def _validation_error_case_id(error: str, case_ids: set[str]) -> str | None:
         if part in case_ids:
             return part
     return None
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _lineage_key(entry: Dict[str, Any]) -> str:
+    text = "|".join(
+        [
+            str(entry.get("execution_plan_sha256") or ""),
+            str(entry.get("case_filter") or {}),
+            ",".join(str(case_id) for case_id in entry.get("runnable_case_ids") or []),
+        ]
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _write_plan_lineage(
+    *,
+    paths: RunPaths,
+    run_id: str,
+    execution_plan_path: Path,
+    plan: Any,
+    runnable_case_ids: Sequence[str],
+    blocked_case_errors: Mapping[str, list[str]],
+    shards: Mapping[int, Sequence[str]],
+    args: argparse.Namespace,
+) -> None:
+    raw = plan.raw if isinstance(plan.raw, dict) else {}
+    plan_cases = list(plan.cases)
+    plan_case_ids = [case.case_id for case in plan_cases]
+    continuation_case_ids = [
+        case.case_id
+        for case in plan_cases
+        if isinstance(case.sampling_meta, dict) and case.sampling_meta.get("continuation")
+    ]
+    model_counts = Counter(
+        str(((case.sampling_meta or {}).get("vace_model_plan") or {}).get("model_name") or "<missing>")
+        for case in plan_cases
+    )
+    route_counts = Counter(str(case.generator_route or "<missing>") for case in plan_cases)
+    subject_sources = Counter(str((case.sampling_meta or {}).get("subject_first_source") or "<missing>") for case in plan_cases)
+    entry = {
+        "first_seen_at_utc": utc_now_iso(),
+        "last_seen_at_utc": utc_now_iso(),
+        "invocation_count": 1,
+        "execution_plan": str(execution_plan_path),
+        "execution_plan_sha256": _file_sha256(execution_plan_path),
+        "plan_schema_version": raw.get("schema_version"),
+        "plan_generated_at_utc": raw.get("generated_at_utc"),
+        "base_plan": raw.get("base_plan"),
+        "track_bank": raw.get("track_bank"),
+        "path_mapping": raw.get("path_mapping"),
+        "run_roots": raw.get("run_roots") or [],
+        "completed_case_ids_from_plan": raw.get("completed_case_ids") or [],
+        "completed_video_ids_from_plan": raw.get("completed_video_ids") or [],
+        "case_filter": {"case_id": args.case_id, "max_cases": args.max_cases},
+        "case_count": len(plan_case_ids),
+        "runnable_case_count": len(runnable_case_ids),
+        "blocked_case_count": len(blocked_case_errors),
+        "continuation_case_count": len(continuation_case_ids),
+        "case_ids": plan_case_ids,
+        "runnable_case_ids": list(runnable_case_ids),
+        "blocked_case_ids": sorted(blocked_case_errors),
+        "continuation_case_ids": continuation_case_ids,
+        "operation_counts": dict(plan.validation.get("operation_counts") or {}),
+        "route_counts": dict(route_counts),
+        "model_counts": dict(model_counts),
+        "subject_first_source_counts": dict(subject_sources),
+        "shards": {str(worker_id): list(case_ids) for worker_id, case_ids in shards.items()},
+    }
+    entry["lineage_key"] = _lineage_key(entry)
+
+    path = paths.coordinator_dir / "plan_lineage.json"
+    if path.is_file():
+        lineage = read_json(path)
+    else:
+        lineage = {
+            "schema_version": "dataA_v1_run_plan_lineage_v1",
+            "run_id": run_id,
+            "run_root": str(paths.run_root),
+            "created_at_utc": utc_now_iso(),
+            "plans": [],
+            "case_to_plan": {},
+        }
+    lineage["updated_at_utc"] = utc_now_iso()
+    lineage["run_id"] = run_id
+    lineage["run_root"] = str(paths.run_root)
+    plans = list(lineage.get("plans") or [])
+    existing_index = next((idx for idx, item in enumerate(plans) if item.get("lineage_key") == entry["lineage_key"]), None)
+    if existing_index is None:
+        plans.append(entry)
+    else:
+        previous = dict(plans[existing_index])
+        entry["first_seen_at_utc"] = previous.get("first_seen_at_utc") or entry["first_seen_at_utc"]
+        entry["invocation_count"] = int(previous.get("invocation_count") or 1) + 1
+        plans[existing_index] = entry
+    lineage["plans"] = plans
+
+    case_to_plan: Dict[str, Any] = dict(lineage.get("case_to_plan") or {})
+    for case in plan_cases:
+        if case.case_id not in set(runnable_case_ids):
+            continue
+        case_to_plan[case.case_id] = {
+            "execution_plan": str(execution_plan_path),
+            "execution_plan_sha256": entry["execution_plan_sha256"],
+            "lineage_key": entry["lineage_key"],
+            "operation": case.operation,
+            "generator_route": case.generator_route,
+            "target_video_id": case.target.video_id,
+            "target_track_id": case.target.track_id,
+            "donor_video_id": None if case.donor is None else case.donor.video_id,
+            "donor_track_id": None if case.donor is None else case.donor.track_id,
+            "is_continuation_case": case.case_id in set(continuation_case_ids),
+            "continuation": (case.sampling_meta or {}).get("continuation"),
+            "mask_policy": (case.sampling_meta or {}).get("mask_policy"),
+            "vace_model_plan": (case.sampling_meta or {}).get("vace_model_plan"),
+        }
+    lineage["case_to_plan"] = case_to_plan
+    write_json(path, lineage)
 
 
 def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
@@ -138,6 +264,17 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
         shards = shard_cases(case_ids, run_id, topology)
         plan_report["shards"] = {str(worker_id): ids for worker_id, ids in shards.items()}
         paths.coordinator_dir.mkdir(parents=True, exist_ok=True)
+        _write_plan_lineage(
+            paths=paths,
+            run_id=run_id,
+            execution_plan_path=execution_plan_path,
+            plan=plan,
+            runnable_case_ids=case_ids,
+            blocked_case_errors=blocked_case_errors,
+            shards=shards,
+            args=args,
+        )
+        plan_report["plan_lineage"] = str(paths.coordinator_dir / "plan_lineage.json")
         for group in topology.groups:
             shard_payload = {
                 "run_id": run_id,

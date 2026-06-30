@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from argparse import Namespace
 import shutil
 
 import numpy as np
 import pytest
 
-from scripts.dataa_v1.common import DataAError, write_json
+from scripts.dataa_v1.common import DataAError, read_json, write_json
 from scripts.dataa_v1.config import DEFAULT_CONFIG, apply_cli_overrides
 from scripts.dataa_v1.execution_plan import load_execution_plan, validate_execution_cases
 from scripts.dataa_v1.gpu_telemetry import aggregate_vram_ratio, parse_nvidia_smi_csv, summarize_telemetry
@@ -14,7 +15,7 @@ from scripts.dataa_v1.mask_video import write_mask_video_ffmpeg
 from scripts.dataa_v1.oss_sync import mark_ready_to_upload, should_trigger_upload, upload_case_bundle
 from scripts.dataa_v1.qa import batch_summary, compare_video_metadata
 from scripts.dataa_v1.run_state import RunPaths, RunState
-from scripts.dataa_v1.run_vace14b_batch import _resolve_project_path
+from scripts.dataa_v1.run_vace14b_batch import _resolve_project_path, plan_batch
 from scripts.dataa_v1.topology import build_topology, shard_cases, stable_worker_id
 from scripts.dataa_v1.worker_commands import build_worker_command
 
@@ -145,6 +146,91 @@ def test_run_state_resume_skips_uploaded_terminal_case(tmp_path: Path) -> None:
     state.append_status("case_a", "uploaded_verified", worker_id=0, detail={"upload_receipt": "receipt"})
     assert state.should_skip_case("case_a")
     assert not state.should_skip_case("case_b")
+
+
+def test_batch_plan_lineage_accumulates_plan_index_for_same_run_id(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "run:",
+                f"  tmp_root: {tmp_path.as_posix()}/runs",
+                "gpu:",
+                "  worker_groups: 1",
+                "  gpus_per_worker: 1",
+                "  fallback_topologies: []",
+                "upload:",
+                "  enabled: false",
+                "vace:",
+                f"  repo_dir: {tmp_path.as_posix()}",
+                f"  checkpoint_dir: {tmp_path.as_posix()}",
+                "  torchrun_bin: torchrun",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    plan_a = tmp_path / "plan_a.json"
+    plan_b = tmp_path / "plan_b.json"
+    write_json(
+        plan_a,
+        {
+            "schema_version": "test_plan_a",
+            "cases": [
+                {
+                    "case_id": "case_a",
+                    "operation": "object_attribute_edit",
+                    "generator_route": "vace14b_masktrack_text_edit",
+                    "target": {"track_id": "ta", "video_id": "video_a", "mask_tube_path": "/m/ta.npz"},
+                    "sampling_meta": {"frozen": True},
+                }
+            ],
+        },
+    )
+    write_json(
+        plan_b,
+        {
+            "schema_version": "test_plan_b",
+            "cases": [
+                {
+                    "case_id": "case_b",
+                    "operation": "person_appearance_swap",
+                    "generator_route": "vace14b_masktrack_reference_swap",
+                    "target": {"track_id": "tb", "video_id": "video_b", "mask_tube_path": "/m/tb.npz"},
+                    "donor": {"track_id": "db", "video_id": "donor_b", "mask_tube_path": "/m/db.npz"},
+                    "sampling_meta": {
+                        "frozen": True,
+                        "continuation": {"strategy": "person_preferred"},
+                        "mask_policy": {"variant_type": "dilated", "person_bbox_disabled": True},
+                    },
+                }
+            ],
+        },
+    )
+
+    base_args = {
+        "track_bank": None,
+        "path_mapping": None,
+        "config": config_path,
+        "checkpoint_dir": None,
+        "run_id": "same_run",
+        "oss_prefix": None,
+        "execute": False,
+        "allow_reshard": True,
+        "case_id": None,
+        "max_cases": None,
+        "topology": None,
+        "launch_workers": False,
+    }
+    plan_batch(Namespace(**base_args, execution_plan=plan_a, resume=False))
+    plan_batch(Namespace(**base_args, execution_plan=plan_b, resume=True))
+
+    lineage = read_json(tmp_path / "runs" / "same_run" / "coordinator" / "plan_lineage.json")
+    assert lineage["run_id"] == "same_run"
+    assert len(lineage["plans"]) == 2
+    assert lineage["case_to_plan"]["case_a"]["execution_plan"].endswith("plan_a.json")
+    assert lineage["case_to_plan"]["case_b"]["execution_plan"].endswith("plan_b.json")
+    assert lineage["case_to_plan"]["case_b"]["is_continuation_case"] is True
 
 
 def test_qa_summary_counts() -> None:
