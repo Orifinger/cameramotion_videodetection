@@ -235,7 +235,21 @@ def _stable_unit(*parts: Any) -> float:
 
 
 def _track_label_text(track: Any) -> str:
-    raw = track.record if hasattr(track, "record") else track
+    if hasattr(track, "record"):
+        raw = track.record
+    elif isinstance(track, Mapping):
+        raw = track
+    elif isinstance(getattr(track, "raw", None), Mapping):
+        raw = track.raw
+    else:
+        raw = {
+            "candidate_class": getattr(track, "candidate_class", None),
+            "canonical_concept": getattr(track, "canonical_concept", None),
+            "display_phrase": getattr(track, "display_phrase", None),
+            "region_family": getattr(track, "region_family", None),
+            "content_domain": getattr(track, "content_domain", None),
+            "style_domain": getattr(track, "style_domain", None),
+        }
     keys = ("candidate_class", "canonical_concept", "display_phrase", "region_family", "content_domain", "style_domain")
     return _track_text(raw, keys)
 

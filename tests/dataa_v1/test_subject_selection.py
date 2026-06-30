@@ -6,8 +6,10 @@ import numpy as np
 
 from scripts.dataa_v1.build_subject_first_execution_plan import build_subject_first_plan
 from scripts.dataa_v1.build_continuation_execution_plan import build_continuation_plan
+from scripts.dataa_v1.build_subject_first_execution_plan import _is_person_track
 from scripts.dataa_v1.common import write_json
 from scripts.dataa_v1.execution_plan import load_execution_plan
+from scripts.dataa_v1.schema import TrackRef
 from scripts.dataa_v1.subject_selection import (
     evaluate_tracks,
     load_selection_config,
@@ -365,6 +367,19 @@ def test_continuation_skips_completed_and_prefers_person_swap(tmp_path: Path) ->
     assert case.sampling_meta["continuation"]["strategy"] == "person_preferred"
     assert case.sampling_meta["mask_policy"]["person_bbox_disabled"] is True
     assert case.sampling_meta["mask_policy"]["variant_type"] != "expanded_bbox"
+
+
+def test_track_label_helpers_accept_trackref() -> None:
+    track = TrackRef(
+        role="donor",
+        track_id="d1",
+        video_id="v2",
+        video_path=None,
+        mask_tube_path="/m/d1.npz",
+        candidate_class="human",
+        raw={"candidate_class": "human"},
+    )
+    assert _is_person_track(track)
 
 
 def test_subject_first_dry_run_writes_audit_not_plan(tmp_path: Path) -> None:
