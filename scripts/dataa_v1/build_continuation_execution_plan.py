@@ -44,6 +44,9 @@ from scripts.dataa_v1.subject_selection import (
 DEFAULT_OUT_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace_continuation_plan.json")
 DEFAULT_OUT_VACE14B_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace14b_continuation_plan.json")
 DEFAULT_OUT_VACE13B_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace13b_continuation_plan.json")
+DEFAULT_OUT_RESERVE_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace_continuation_reserve_plan.json")
+DEFAULT_OUT_VACE14B_RESERVE_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace14b_continuation_reserve_plan.json")
+DEFAULT_OUT_VACE13B_RESERVE_PLAN = Path("res/dataA_v1/plans/frozen_subject_first_vace13b_continuation_reserve_plan.json")
 DEFAULT_OUT_AUDIT = Path("res/dataA_v1/audits/subject_first_continuation_plan_audit.json")
 DEFAULT_OUT_RERUN_MANIFEST = Path("res/dataA_v1/audits/subject_first_qwen_sam3_rerun_manifest.json")
 GOOD_PAIR_MATCH_LEVELS = {
@@ -453,6 +456,32 @@ def _case_index_row(case_payload: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _mark_reserve_case(case_payload: Dict[str, Any], *, reason: str, occupied_video_id: str | None) -> None:
+    meta = case_payload.setdefault("sampling_meta", {})
+    meta["continuation_reserve"] = {
+        "schema_version": "dataA_v1_continuation_reserve_v1",
+        "generated_at_utc": utc_now_iso(),
+        "reason": reason,
+        "occupied_video_id": occupied_video_id,
+        "policy": "hold_for_later_plan_with_qwen_sam3_rerun_results",
+    }
+
+
+def _rerun_record(case: Any, *, reason: str, extra: Mapping[str, Any] | None = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "case_id": case.case_id,
+        "video_id": case.target.video_id,
+        "operation": case.operation,
+        "generator_route": case.generator_route,
+        "target_track_id": case.target.track_id,
+        "donor_track_id": None if case.donor is None else case.donor.track_id,
+        "reason": reason,
+    }
+    if extra:
+        payload.update(dict(extra))
+    return payload
+
+
 def build_continuation_plan(
     *,
     track_bank: Path,
@@ -463,6 +492,9 @@ def build_continuation_plan(
     out_plan: Path = DEFAULT_OUT_PLAN,
     out_vace14b_plan: Path = DEFAULT_OUT_VACE14B_PLAN,
     out_vace13b_plan: Path = DEFAULT_OUT_VACE13B_PLAN,
+    out_reserve_plan: Path = DEFAULT_OUT_RESERVE_PLAN,
+    out_vace14b_reserve_plan: Path = DEFAULT_OUT_VACE14B_RESERVE_PLAN,
+    out_vace13b_reserve_plan: Path = DEFAULT_OUT_VACE13B_RESERVE_PLAN,
     out_audit: Path = DEFAULT_OUT_AUDIT,
     out_rerun_manifest: Path = DEFAULT_OUT_RERUN_MANIFEST,
     ffprobe_bin: str = "ffprobe",
@@ -490,28 +522,34 @@ def build_continuation_plan(
     completed_video_ids = {item.video_id for item in completed.values() if item.video_id}
 
     cases: list[Dict[str, Any]] = []
+    reserve_cases: list[Dict[str, Any]] = []
     skipped: list[Dict[str, Any]] = []
     rerun_candidates: list[Dict[str, Any]] = []
+    completed_skips: list[Dict[str, Any]] = []
+    reserve_skips: list[Dict[str, Any]] = []
     used_videos: set[str] = set()
     for case in base_cases:
         video_id = case.target.video_id
         if case.case_id in completed_case_ids:
-            skipped.append({
+            skip = {
                 "case_id": case.case_id,
                 "video_id": video_id,
                 "reason": "already_completed_case",
                 "source": completed[case.case_id].source,
-            })
+            }
+            completed_skips.append(skip)
+            skipped.append(skip)
             continue
         if video_id and video_id in completed_video_ids:
-            skipped.append({"case_id": case.case_id, "video_id": video_id, "reason": "already_completed_video"})
-            continue
-        if video_id and video_id in used_videos:
-            skipped.append({"case_id": case.case_id, "video_id": video_id, "reason": "continuation_target_video_already_used"})
+            skip = {"case_id": case.case_id, "video_id": video_id, "reason": "already_completed_video"}
+            completed_skips.append(skip)
+            skipped.append(skip)
             continue
         selection = selections.get(str(video_id)) if video_id else None
         if selection is None:
-            skipped.append({"case_id": case.case_id, "video_id": video_id, "reason": "no_track_bank_selection_for_video"})
+            rerun = _rerun_record(case, reason="no_track_bank_selection_for_video")
+            rerun_candidates.append(rerun)
+            skipped.append(rerun)
             continue
         new_case, skip = _continuation_case_from_base(case=case, selection=selection, config=config, donor_pool=donor_pool)
         if new_case is None:
@@ -520,8 +558,25 @@ def build_continuation_plan(
             skipped.append(rerun)
             continue
         new_video_id = str((new_case.get("target") or {}).get("video_id") or video_id)
-        if new_video_id in used_videos or new_video_id in completed_video_ids:
-            skipped.append({"case_id": case.case_id, "video_id": new_video_id, "reason": "continuation_repaired_video_already_used"})
+        if new_video_id in completed_video_ids:
+            skip = {"case_id": case.case_id, "video_id": new_video_id, "reason": "continuation_repaired_video_already_completed"}
+            completed_skips.append(skip)
+            skipped.append(skip)
+            continue
+        if (video_id and video_id in used_videos) or new_video_id in used_videos:
+            reason = "continuation_target_video_already_used" if video_id and video_id in used_videos else "continuation_repaired_video_already_used"
+            _mark_reserve_case(new_case, reason=reason, occupied_video_id=str(video_id or new_video_id))
+            reserve_cases.append(new_case)
+            reserve = {
+                "case_id": case.case_id,
+                "video_id": new_video_id,
+                "reason": reason,
+                "target_track_id": (new_case.get("target") or {}).get("track_id"),
+                "operation": new_case.get("operation"),
+                "generator_route": new_case.get("generator_route"),
+            }
+            reserve_skips.append(reserve)
+            skipped.append(reserve)
             continue
         used_videos.add(new_video_id)
         cases.append(new_case)
@@ -534,16 +589,31 @@ def build_continuation_plan(
     normalized_vace13b = normalize_cases({"cases": vace13b_cases}, track_index, resolver, str(out_vace13b_plan))
     vace14b_validation = _validate_execution_cases_allow_empty(normalized_vace14b)
     vace13b_validation = _validate_execution_cases_allow_empty(normalized_vace13b)
+    normalized_reserve = normalize_cases({"cases": reserve_cases}, track_index, resolver, str(out_reserve_plan))
+    reserve_validation = _validate_execution_cases_allow_empty(normalized_reserve)
+    reserve_vace14b_cases = [case for case in reserve_cases if _case_model_name(case) == "vace-14B"]
+    reserve_vace13b_cases = [case for case in reserve_cases if _case_model_name(case) == "vace-1.3B"]
+    normalized_reserve_vace14b = normalize_cases({"cases": reserve_vace14b_cases}, track_index, resolver, str(out_vace14b_reserve_plan))
+    normalized_reserve_vace13b = normalize_cases({"cases": reserve_vace13b_cases}, track_index, resolver, str(out_vace13b_reserve_plan))
+    reserve_vace14b_validation = _validate_execution_cases_allow_empty(normalized_reserve_vace14b)
+    reserve_vace13b_validation = _validate_execution_cases_allow_empty(normalized_reserve_vace13b)
     audit_rows = [audit_record(item) for item in evaluated]
     summary = _summary(audit_rows, cases)
     summary["completed_case_count"] = len(completed_case_ids)
     summary["completed_video_count"] = len(completed_video_ids)
+    summary["completed_skip_count"] = len(completed_skips)
+    summary["reserve_case_count"] = len(reserve_cases)
+    summary["reserve_reason_counts"] = dict(Counter(str(item.get("reason") or "<missing>") for item in reserve_skips))
     summary["continuation_operation_counts"] = dict(Counter(str(case.get("operation") or "<missing>") for case in cases))
     summary["continuation_model_counts"] = dict(Counter(_case_model_name(case) for case in cases))
+    summary["reserve_operation_counts"] = dict(Counter(str(case.get("operation") or "<missing>") for case in reserve_cases))
+    summary["reserve_model_counts"] = dict(Counter(_case_model_name(case) for case in reserve_cases))
     summary["qwen_sam3_rerun_candidate_count"] = len(rerun_candidates)
     summary["qwen_sam3_rerun_reason_counts"] = dict(Counter(str(item.get("reason") or "<missing>") for item in rerun_candidates))
     kept_cases = [_case_index_row(case) for case in cases]
     kept_video_ids = sorted({str(item["video_id"]) for item in kept_cases if item.get("video_id")})
+    reserved_cases = [_case_index_row(case) for case in reserve_cases]
+    reserved_video_ids = sorted({str(item["video_id"]) for item in reserved_cases if item.get("video_id")})
 
     payload = _plan_payload(
         schema_version="dataA_v1_frozen_subject_first_vace_continuation_plan_v1",
@@ -557,6 +627,7 @@ def build_continuation_plan(
     payload["run_roots"] = [str(path) for path in run_roots]
     payload["completed_case_ids"] = sorted(completed_case_ids)
     payload["completed_video_ids"] = sorted(completed_video_ids)
+    payload["reserved_same_video_case_ids"] = [str(case.get("case_id")) for case in reserve_cases if case.get("case_id")]
 
     vace14b_payload = _plan_payload(
         schema_version="dataA_v1_frozen_subject_first_vace14b_continuation_plan_v1",
@@ -576,6 +647,34 @@ def build_continuation_plan(
         validation=vace13b_validation,
         cases=vace13b_cases,
     )
+    reserve_payload = _plan_payload(
+        schema_version="dataA_v1_frozen_subject_first_vace_continuation_reserve_plan_v1",
+        track_bank=track_bank,
+        base_plan=base_plan,
+        path_mapping=path_mapping,
+        selection_summary={**summary, "plan_role": "same_video_reserve"},
+        validation=reserve_validation,
+        cases=reserve_cases,
+    )
+    reserve_payload["run_roots"] = [str(path) for path in run_roots]
+    reserve_vace14b_payload = _plan_payload(
+        schema_version="dataA_v1_frozen_subject_first_vace14b_continuation_reserve_plan_v1",
+        track_bank=track_bank,
+        base_plan=base_plan,
+        path_mapping=path_mapping,
+        selection_summary={**_summary(audit_rows, reserve_vace14b_cases), "plan_role": "same_video_reserve"},
+        validation=reserve_vace14b_validation,
+        cases=reserve_vace14b_cases,
+    )
+    reserve_vace13b_payload = _plan_payload(
+        schema_version="dataA_v1_frozen_subject_first_vace13b_continuation_reserve_plan_v1",
+        track_bank=track_bank,
+        base_plan=base_plan,
+        path_mapping=path_mapping,
+        selection_summary={**_summary(audit_rows, reserve_vace13b_cases), "plan_role": "same_video_reserve"},
+        validation=reserve_vace13b_validation,
+        cases=reserve_vace13b_cases,
+    )
     audit = {
         "schema_version": "dataA_v1_subject_first_continuation_audit_v1",
         "generated_at_utc": utc_now_iso(),
@@ -586,9 +685,15 @@ def build_continuation_plan(
         "validation": validation,
         "vace14b_validation": vace14b_validation,
         "vace13b_validation": vace13b_validation,
+        "reserve_validation": reserve_validation,
+        "reserve_vace14b_validation": reserve_vace14b_validation,
+        "reserve_vace13b_validation": reserve_vace13b_validation,
         "skipped": skipped,
+        "completed_skips": completed_skips,
+        "same_video_reserve_skips": reserve_skips,
         "qwen_sam3_rerun_candidates": rerun_candidates,
         "kept_cases": kept_cases,
+        "reserved_same_video_cases": reserved_cases,
         "completed": [completed_case.__dict__ for completed_case in completed.values()],
         "candidate_count": len(audit_rows),
     }
@@ -603,6 +708,7 @@ def build_continuation_plan(
             "keep_if_person_swap": True,
             "keep_if_good_pair_and_mask_not_small": True,
             "rerun_other_unfinished_cases": True,
+            "same_video_conflicts_go_to_reserve_plan": True,
             "rerun_scope": "unfinished_cases_only",
         },
         "summary": {
@@ -610,6 +716,8 @@ def build_continuation_plan(
             "rerun_video_count": len({str(item.get("video_id")) for item in rerun_candidates if item.get("video_id")}),
             "kept_case_count": len(kept_cases),
             "kept_video_count": len(kept_video_ids),
+            "reserved_same_video_case_count": len(reserved_cases),
+            "reserved_same_video_count": len(reserved_video_ids),
             "completed_case_count": len(completed_case_ids),
             "completed_video_count": len(completed_video_ids),
             "reason_counts": dict(Counter(str(item.get("reason") or "<missing>") for item in rerun_candidates)),
@@ -618,6 +726,8 @@ def build_continuation_plan(
         "completed_video_ids": sorted(completed_video_ids),
         "kept_cases": kept_cases,
         "kept_video_ids": kept_video_ids,
+        "reserved_same_video_cases": reserved_cases,
+        "reserved_same_video_ids": reserved_video_ids,
         "rerun_candidates": rerun_candidates,
         "rerun_video_ids": sorted({str(item.get("video_id")) for item in rerun_candidates if item.get("video_id")}),
     }
@@ -625,6 +735,9 @@ def build_continuation_plan(
         write_json(out_plan, payload)
         write_json(out_vace14b_plan, vace14b_payload)
         write_json(out_vace13b_plan, vace13b_payload)
+        write_json(out_reserve_plan, reserve_payload)
+        write_json(out_vace14b_reserve_plan, reserve_vace14b_payload)
+        write_json(out_vace13b_reserve_plan, reserve_vace13b_payload)
         write_json(out_audit, audit)
         write_json(out_rerun_manifest, rerun_manifest)
     return {
@@ -632,12 +745,18 @@ def build_continuation_plan(
         "out_plan": str(out_plan),
         "out_vace14b_plan": str(out_vace14b_plan),
         "out_vace13b_plan": str(out_vace13b_plan),
+        "out_reserve_plan": str(out_reserve_plan),
+        "out_vace14b_reserve_plan": str(out_vace14b_reserve_plan),
+        "out_vace13b_reserve_plan": str(out_vace13b_reserve_plan),
         "out_audit": str(out_audit),
         "out_rerun_manifest": str(out_rerun_manifest),
         "summary": summary,
         "validation": validation,
         "vace14b_validation": vace14b_validation,
         "vace13b_validation": vace13b_validation,
+        "reserve_validation": reserve_validation,
+        "reserve_vace14b_validation": reserve_vace14b_validation,
+        "reserve_vace13b_validation": reserve_vace13b_validation,
         "skipped_count": len(skipped),
     }
 
@@ -652,6 +771,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--out-plan", type=Path, default=DEFAULT_OUT_PLAN)
     parser.add_argument("--out-vace14b-plan", type=Path, default=DEFAULT_OUT_VACE14B_PLAN)
     parser.add_argument("--out-vace13b-plan", type=Path, default=DEFAULT_OUT_VACE13B_PLAN)
+    parser.add_argument("--out-reserve-plan", type=Path, default=DEFAULT_OUT_RESERVE_PLAN)
+    parser.add_argument("--out-vace14b-reserve-plan", type=Path, default=DEFAULT_OUT_VACE14B_RESERVE_PLAN)
+    parser.add_argument("--out-vace13b-reserve-plan", type=Path, default=DEFAULT_OUT_VACE13B_RESERVE_PLAN)
     parser.add_argument("--out-audit", type=Path, default=DEFAULT_OUT_AUDIT)
     parser.add_argument("--out-rerun-manifest", type=Path, default=DEFAULT_OUT_RERUN_MANIFEST)
     parser.add_argument("--ffprobe-bin", default="ffprobe")
@@ -673,6 +795,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             out_plan=_resolve_project_path(args.out_plan) or args.out_plan,
             out_vace14b_plan=_resolve_project_path(args.out_vace14b_plan) or args.out_vace14b_plan,
             out_vace13b_plan=_resolve_project_path(args.out_vace13b_plan) or args.out_vace13b_plan,
+            out_reserve_plan=_resolve_project_path(args.out_reserve_plan) or args.out_reserve_plan,
+            out_vace14b_reserve_plan=_resolve_project_path(args.out_vace14b_reserve_plan) or args.out_vace14b_reserve_plan,
+            out_vace13b_reserve_plan=_resolve_project_path(args.out_vace13b_reserve_plan) or args.out_vace13b_reserve_plan,
             out_audit=_resolve_project_path(args.out_audit) or args.out_audit,
             out_rerun_manifest=_resolve_project_path(args.out_rerun_manifest) or args.out_rerun_manifest,
             ffprobe_bin=args.ffprobe_bin,
@@ -689,14 +814,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"cases={summary['validation']['case_count']} "
         f"vace14b_cases={summary['vace14b_validation']['case_count']} "
         f"vace13b_cases={summary['vace13b_validation']['case_count']} "
+        f"reserve_cases={summary['reserve_validation']['case_count']} "
         f"completed_cases={summary['summary']['completed_case_count']} "
         f"completed_videos={summary['summary']['completed_video_count']} "
         f"skipped={summary['skipped_count']} "
         f"rerun_candidates={summary['summary']['qwen_sam3_rerun_candidate_count']} "
-        f"valid={summary['validation']['valid']}"
+        f"valid={summary['validation']['valid']} "
+        f"reserve_valid={summary['reserve_validation']['valid']}"
     )
-    if not summary["validation"]["valid"]:
+    if not summary["validation"]["valid"] or not summary["reserve_validation"]["valid"]:
         print(f"validation_errors={summary['validation']['errors']}", file=sys.stderr)
+        print(f"reserve_validation_errors={summary['reserve_validation']['errors']}", file=sys.stderr)
         return 1
     return 0
 

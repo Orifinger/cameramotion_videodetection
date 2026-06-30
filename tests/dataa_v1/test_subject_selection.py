@@ -357,6 +357,9 @@ def test_continuation_skips_completed_and_prefers_person_swap(tmp_path: Path) ->
         out_plan=tmp_path / "continuation.json",
         out_vace14b_plan=tmp_path / "continuation_14b.json",
         out_vace13b_plan=tmp_path / "continuation_13b.json",
+        out_reserve_plan=tmp_path / "continuation_reserve.json",
+        out_vace14b_reserve_plan=tmp_path / "continuation_reserve_14b.json",
+        out_vace13b_reserve_plan=tmp_path / "continuation_reserve_13b.json",
         out_audit=tmp_path / "continuation_audit.json",
         out_rerun_manifest=tmp_path / "continuation_rerun_manifest.json",
         num_workers=1,
@@ -402,6 +405,9 @@ def test_continuation_keeps_good_pair_and_writes_rerun_manifest(tmp_path: Path) 
         out_plan=tmp_path / "continuation.json",
         out_vace14b_plan=tmp_path / "continuation_14b.json",
         out_vace13b_plan=tmp_path / "continuation_13b.json",
+        out_reserve_plan=tmp_path / "continuation_reserve.json",
+        out_vace14b_reserve_plan=tmp_path / "continuation_reserve_14b.json",
+        out_vace13b_reserve_plan=tmp_path / "continuation_reserve_13b.json",
         out_audit=tmp_path / "continuation_audit.json",
         out_rerun_manifest=rerun_manifest,
         num_workers=1,
@@ -449,6 +455,9 @@ def test_continuation_sends_bad_unfinished_pair_to_rerun_manifest(tmp_path: Path
         out_plan=tmp_path / "continuation.json",
         out_vace14b_plan=tmp_path / "continuation_14b.json",
         out_vace13b_plan=tmp_path / "continuation_13b.json",
+        out_reserve_plan=tmp_path / "continuation_reserve.json",
+        out_vace14b_reserve_plan=tmp_path / "continuation_reserve_14b.json",
+        out_vace13b_reserve_plan=tmp_path / "continuation_reserve_13b.json",
         out_audit=tmp_path / "continuation_audit.json",
         out_rerun_manifest=rerun_manifest,
         num_workers=1,
@@ -460,6 +469,65 @@ def test_continuation_sends_bad_unfinished_pair_to_rerun_manifest(tmp_path: Path
     assert manifest["rerun_video_ids"] == ["target_video"]
     assert manifest["rerun_candidates"][0]["reason"] == "needs_qwen_sam3_rerun_and_repair"
     assert manifest["rerun_candidates"][0]["pair_match"]["good_pair"] is False
+
+
+def test_continuation_same_video_conflict_goes_to_reserve_plan(tmp_path: Path) -> None:
+    target_a = _track(tmp_path, video_id="target_video", track_id="target_vehicle_a", box=(20, 20, 40, 40), candidate_class="vehicle")
+    target_b = _track(tmp_path, video_id="target_video", track_id="target_vehicle_b", box=(30, 30, 35, 35), candidate_class="vehicle")
+    donor_a = _track(tmp_path, video_id="donor_a", track_id="donor_vehicle_a", box=(25, 25, 35, 35), candidate_class="vehicle")
+    donor_b = _track(tmp_path, video_id="donor_b", track_id="donor_vehicle_b", box=(25, 25, 35, 35), candidate_class="vehicle")
+    track_bank = tmp_path / "tracks.json"
+    base_plan = tmp_path / "base_plan.json"
+    rerun_manifest = tmp_path / "rerun_manifest.json"
+    reserve_plan = tmp_path / "continuation_reserve.json"
+    write_json(track_bank, {"tracks": [target_a, target_b, donor_a, donor_b]})
+    write_json(
+        base_plan,
+        {
+            "cases": [
+                {
+                    "case_id": "case_a",
+                    "operation": "object_swap",
+                    "generator_route": "vace14b_masktrack_reference_swap",
+                    "target_track_id": "target_vehicle_a",
+                    "donor_track_id": "donor_vehicle_a",
+                },
+                {
+                    "case_id": "case_b",
+                    "operation": "object_swap",
+                    "generator_route": "vace14b_masktrack_reference_swap",
+                    "target_track_id": "target_vehicle_b",
+                    "donor_track_id": "donor_vehicle_b",
+                },
+            ]
+        },
+    )
+
+    summary = build_continuation_plan(
+        track_bank=track_bank,
+        base_plan=base_plan,
+        run_roots=[tmp_path / "run"],
+        selection_config=None,
+        out_plan=tmp_path / "continuation.json",
+        out_vace14b_plan=tmp_path / "continuation_14b.json",
+        out_vace13b_plan=tmp_path / "continuation_13b.json",
+        out_reserve_plan=reserve_plan,
+        out_vace14b_reserve_plan=tmp_path / "continuation_reserve_14b.json",
+        out_vace13b_reserve_plan=tmp_path / "continuation_reserve_13b.json",
+        out_audit=tmp_path / "continuation_audit.json",
+        out_rerun_manifest=rerun_manifest,
+        num_workers=1,
+    )
+
+    assert summary["validation"]["case_count"] == 1
+    assert summary["reserve_validation"]["case_count"] == 1
+    assert summary["summary"]["qwen_sam3_rerun_candidate_count"] == 0
+    reserve = load_execution_plan(execution_plan_path=reserve_plan, track_bank_path=None, path_mapping_path=None)
+    assert [case.case_id for case in reserve.cases] == ["case_b"]
+    assert reserve.cases[0].sampling_meta["continuation_reserve"]["reason"] == "continuation_target_video_already_used"
+    manifest = read_json(rerun_manifest)
+    assert manifest["rerun_candidates"] == []
+    assert manifest["reserved_same_video_ids"] == ["target_video"]
 
 
 def test_merge_sam3_track_banks_replaces_only_rerun_videos(tmp_path: Path) -> None:
