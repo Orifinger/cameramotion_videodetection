@@ -90,6 +90,24 @@ def _dilate_masks(masks: np.ndarray, radius: int) -> np.ndarray:
     return np.stack([ndimage.binary_dilation(frame > 0, structure=kernel).astype(np.uint8) for frame in masks])
 
 
+def _erode_masks(masks: np.ndarray, radius: int) -> tuple[np.ndarray, int]:
+    kernel = disk_structure(radius)
+    frames = []
+    recovered = 0
+    for frame in (masks > 0).astype(np.uint8):
+        eroded = ndimage.binary_erosion(frame > 0, structure=kernel).astype(np.uint8)
+        if frame.any() and not eroded.any():
+            eroded = frame
+            recovered += 1
+        frames.append(eroded)
+    return np.stack(frames).astype(np.uint8), recovered
+
+
+def _close_masks(masks: np.ndarray, radius: int) -> np.ndarray:
+    kernel = disk_structure(radius)
+    return np.stack([ndimage.binary_closing(frame > 0, structure=kernel).astype(np.uint8) for frame in masks])
+
+
 def _bbox_xywh(mask: np.ndarray) -> tuple[int, int, int, int] | None:
     ys, xs = np.where(mask > 0)
     if xs.size == 0 or ys.size == 0:
@@ -159,17 +177,26 @@ def apply_effective_mask_policy(
         raise DataAError("blocked_missing_frozen_mask_policy: sampling_meta.mask_policy is required")
     config = config or MaskProcessingConfig()
     variant = str(policy.get("variant_type") or "")
-    if variant not in {"sam3_shape", "dilated", "expanded_bbox"}:
+    if variant not in {"sam3_shape", "dilated", "expanded_bbox", "closing", "erode_then_dilate"}:
         raise DataAError(f"blocked_invalid_mask_policy: unsupported variant_type={variant}")
     if variant == "expanded_bbox" and bool(policy.get("person_bbox_disabled")):
         raise DataAError("blocked_invalid_mask_policy: expanded_bbox is disabled for person route")
 
     base_gen = (masks["M_gen"] > 0).astype(np.uint8)
+    empty_erosion_recovered_frames = 0
     if variant == "sam3_shape":
         effective = base_gen
     elif variant == "dilated":
         radius = int(policy.get("dilation_radius_px") or config.dilation_radius_px)
         effective = _dilate_masks((masks["M_edit"] > 0).astype(np.uint8), radius)
+    elif variant == "closing":
+        radius = int(policy.get("closing_radius_px") or config.closing_radius_px)
+        effective = _close_masks((masks["M_edit"] > 0).astype(np.uint8), radius)
+    elif variant == "erode_then_dilate":
+        erosion_radius = int(policy.get("erosion_radius_px") or 1)
+        dilation_radius = int(policy.get("dilation_radius_px") or config.dilation_radius_px)
+        eroded, empty_erosion_recovered_frames = _erode_masks((masks["M_edit"] > 0).astype(np.uint8), erosion_radius)
+        effective = _dilate_masks(eroded, dilation_radius)
     else:
         expand_ratio = float(policy.get("bbox_expand_ratio") or 1.15)
         effective = _expanded_bbox_mask(base_gen, expand_ratio)
@@ -187,6 +214,7 @@ def apply_effective_mask_policy(
         "base_gen_bbox_tube": _bbox_tube(base_gen),
         "effective_bbox_tube": _bbox_tube(updated["M_gen"]),
         "alpha_feather_sigma_px": float(config.alpha_feather_sigma_px),
+        "empty_erosion_recovered_frames": int(empty_erosion_recovered_frames),
         "implementation": "plan-frozen effective mask policy",
     }
     return updated, params

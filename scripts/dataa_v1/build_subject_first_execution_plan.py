@@ -357,7 +357,14 @@ def _freeze_mask_policy(case_id: str, operation: str | None, track: Any, config:
     unit = _stable_unit("mask_policy_variant", seed)
     person = operation == "person_appearance_swap" or _is_person_track(track)
     if person:
-        variant = "sam3_shape" if unit < 0.75 else "dilated"
+        if unit < 0.60:
+            variant = "sam3_shape"
+        elif unit < 0.85:
+            variant = "dilated"
+        elif unit < 0.95:
+            variant = "closing"
+        else:
+            variant = "erode_then_dilate"
     elif unit < 0.70:
         variant = "sam3_shape"
     elif unit < 0.90:
@@ -377,11 +384,13 @@ def _freeze_mask_policy(case_id: str, operation: str | None, track: Any, config:
         "variant_type": variant,
         "seed": int(seed),
         "dilation_radius_px": int(radius),
+        "erosion_radius_px": 2 if person else 0,
+        "closing_radius_px": 4 if person else 1,
         "bbox_expand_ratio": 1.15,
         "person_bbox_disabled": bool(person),
         "base_dilation_radius_px": 2,
         "selection_unit_interval_value": float(unit),
-        "trigger_reason": "plan_time_deterministic_policy",
+        "trigger_reason": "person_shape_preserving_policy" if person else "plan_time_deterministic_policy",
     }
 
 

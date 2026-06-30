@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from scripts.dataa_v1.build_subject_first_execution_plan import build_subject_first_plan
+from scripts.dataa_v1.build_continuation_execution_plan import build_continuation_plan
 from scripts.dataa_v1.common import write_json
 from scripts.dataa_v1.execution_plan import load_execution_plan
 from scripts.dataa_v1.subject_selection import (
@@ -191,7 +192,7 @@ def test_subject_first_plan_loads_and_validates(tmp_path: Path) -> None:
     plan = load_execution_plan(execution_plan_path=out_plan, track_bank_path=None, path_mapping_path=None)
     assert plan.validation["valid"]
     assert plan.cases[0].sampling_meta["target_selection"]["selection_role"] in {"fallback_primary", "primary_subject"}
-    assert plan.cases[0].sampling_meta["mask_policy"]["variant_type"] in {"sam3_shape", "dilated", "expanded_bbox"}
+    assert plan.cases[0].sampling_meta["mask_policy"]["variant_type"] in {"sam3_shape", "dilated", "expanded_bbox", "closing", "erode_then_dilate"}
     assert plan.cases[0].sampling_meta["vace_model_plan"]["model_name"] == "vace-14B"
 
 
@@ -260,7 +261,7 @@ def test_subject_first_writes_coverage_and_reserve_plans(tmp_path: Path) -> None
     assert repaired.donor.video_id == "donor_video"
     relaxed_case = next(case for case in coverage_payload.cases if case.case_id == "case_relaxed")
     assert relaxed_case.sampling_meta["target_selection"]["quality_tier"] == "area_gate_fallback_largest"
-    assert relaxed_case.sampling_meta["mask_policy"]["variant_type"] in {"sam3_shape", "dilated", "expanded_bbox"}
+    assert relaxed_case.sampling_meta["mask_policy"]["variant_type"] in {"sam3_shape", "dilated", "expanded_bbox", "closing", "erode_then_dilate"}
     assert any(case.case_id.startswith("dataA_v1_subject_first_coverage_") for case in coverage_payload.cases)
 
 
@@ -304,6 +305,66 @@ def test_operation_fallback_does_not_keep_object_swap_on_person(tmp_path: Path) 
     assert case.generator_route == "vace14b_masktrack_reference_swap"
     assert case.sampling_meta["operation_repair"]["original_operation"] == "object_swap"
     assert case.sampling_meta["mask_policy"]["person_bbox_disabled"] is True
+    assert case.sampling_meta["mask_policy"]["variant_type"] != "expanded_bbox"
+
+
+def test_continuation_skips_completed_and_prefers_person_swap(tmp_path: Path) -> None:
+    completed_object = _track(tmp_path, video_id="done_video", track_id="done_object", box=(35, 35, 30, 30), candidate_class="bounded_object")
+    remaining_object = _track(tmp_path, video_id="remain_video", track_id="remain_object", box=(45, 45, 8, 8), candidate_class="bounded_object")
+    remaining_person = _track(tmp_path, video_id="remain_video", track_id="remain_person", box=(20, 20, 40, 50), candidate_class="human")
+    donor_person = _track(tmp_path, video_id="donor_video", track_id="donor_person", box=(20, 20, 40, 50), candidate_class="human")
+    track_bank = tmp_path / "tracks.json"
+    base_plan = tmp_path / "base_plan.json"
+    run_root = tmp_path / "run"
+    attempt = run_root / "worker_00" / "attempts" / "case_done"
+    attempt.mkdir(parents=True)
+    write_json(attempt / "case_manifest.json", {"case_id": "case_done", "target": {"video_id": "done_video"}})
+    write_json(attempt / "generation_result.json", {"status": "generated", "full_video": {"status": "ok"}})
+    (attempt / "full_real.mp4").write_bytes(b"x")
+    (attempt / "full_fake.mp4").write_bytes(b"x")
+    write_json(track_bank, {"tracks": [completed_object, remaining_object, remaining_person, donor_person]})
+    write_json(
+        base_plan,
+        {
+            "cases": [
+                {
+                    "case_id": "case_done",
+                    "operation": "object_swap",
+                    "generator_route": "vace14b_masktrack_reference_swap",
+                    "target_track_id": "done_object",
+                    "donor_track_id": "donor_person",
+                },
+                {
+                    "case_id": "case_remaining",
+                    "operation": "object_swap",
+                    "generator_route": "vace14b_masktrack_reference_swap",
+                    "target_track_id": "remain_object",
+                    "donor_track_id": "donor_person",
+                },
+            ]
+        },
+    )
+
+    summary = build_continuation_plan(
+        track_bank=track_bank,
+        base_plan=base_plan,
+        run_roots=[run_root],
+        selection_config=None,
+        out_plan=tmp_path / "continuation.json",
+        out_vace14b_plan=tmp_path / "continuation_14b.json",
+        out_vace13b_plan=tmp_path / "continuation_13b.json",
+        out_audit=tmp_path / "continuation_audit.json",
+        num_workers=1,
+    )
+    assert summary["validation"]["valid"]
+    plan = load_execution_plan(execution_plan_path=tmp_path / "continuation.json", track_bank_path=None, path_mapping_path=None)
+    assert [case.case_id for case in plan.cases] == ["case_remaining"]
+    case = plan.cases[0]
+    assert case.operation == "person_appearance_swap"
+    assert case.target.track_id == "remain_person"
+    assert case.sampling_meta["continuation"]["strategy"] == "person_preferred"
+    assert case.sampling_meta["mask_policy"]["person_bbox_disabled"] is True
+    assert case.sampling_meta["mask_policy"]["variant_type"] != "expanded_bbox"
 
 
 def test_subject_first_dry_run_writes_audit_not_plan(tmp_path: Path) -> None:

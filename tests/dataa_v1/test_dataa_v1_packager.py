@@ -156,6 +156,26 @@ def test_effective_mask_policy_is_frozen_and_can_expand_bbox(tmp_path: Path) -> 
     assert meta["effective_mask_area_stats"]["mean"] > meta["base_gen_area_stats"]["mean"]
 
 
+def test_person_mask_policy_morphology_variants_do_not_use_bbox(tmp_path: Path) -> None:
+    tube = load_mask_tube(_tube(tmp_path / "tube.npz", np.arange(0, 17, dtype=np.int32)))
+    masks, _params = process_masks(tube.masks)
+    for variant in ("closing", "erode_then_dilate"):
+        effective, meta = apply_effective_mask_policy(
+            masks,
+            {
+                "variant_type": variant,
+                "seed": 11,
+                "dilation_radius_px": 4,
+                "erosion_radius_px": 1,
+                "closing_radius_px": 2,
+                "person_bbox_disabled": True,
+            },
+        )
+        assert effective["M_gen"].shape == masks["M_gen"].shape
+        assert meta["mask_policy"]["variant_type"] == variant
+        assert meta["effective_mask_area_stats"]["mean"] > 0.0
+
+
 def test_donor_reference_scoring(tmp_path: Path) -> None:
     tube = load_mask_tube(_tube(tmp_path / "donor.npz", np.arange(10, 20, dtype=np.int32), offset=8))
     choice = choose_donor_frame(tube)
