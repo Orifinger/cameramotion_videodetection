@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import subprocess
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
@@ -332,6 +334,46 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
     return plan_report
 
 
+def _total_planned_cases(plan: Mapping[str, Any]) -> int:
+    return sum(len(case_ids or []) for case_ids in (plan.get("shards") or {}).values())
+
+
+def _latest_status_counts(status_path: Path) -> Counter[str]:
+    latest: Dict[str, str] = {}
+    if not status_path.is_file():
+        return Counter()
+    with status_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            case_id = event.get("case_id")
+            status = event.get("status")
+            if case_id and status:
+                latest[str(case_id)] = str(status)
+    return Counter(latest.values())
+
+
+def _print_progress(plan: Mapping[str, Any], *, alive_workers: int, started_at: float) -> None:
+    coordinator = Path(str(plan.get("coordinator_dir") or Path(str(plan.get("run_root", "."))) / "coordinator"))
+    counts = _latest_status_counts(coordinator / "case_status.jsonl")
+    total = _total_planned_cases(plan)
+    done = sum(count for status, count in counts.items() if status in {"generated", "uploaded_verified", "accepted", "upload_planned"})
+    blocked = sum(count for status, count in counts.items() if status.startswith("blocked_") or status.startswith("rejected_"))
+    active = counts.get("packaging_started", 0) + counts.get("packed", 0) + counts.get("generation_started", 0)
+    elapsed_min = (time.monotonic() - started_at) / 60.0
+    top_status = " ".join(f"{status}={count}" for status, count in counts.most_common(8)) or "no_case_status_yet"
+    print(
+        f"progress elapsed_min={elapsed_min:.1f} total={total} seen={sum(counts.values())} "
+        f"done={done} blocked={blocked} active={active} alive_workers={alive_workers} {top_status}",
+        flush=True,
+    )
+
+
 def launch_workers(plan: Dict[str, Any]) -> int:
     commands = plan.get("worker_commands", [])
     procs = []
@@ -354,10 +396,27 @@ def launch_workers(plan: Dict[str, Any]) -> int:
         print(f"launching worker_{worker_id:02d}")
         procs.append((worker_id, subprocess.Popen(command["argv"], env=env)))
     failed: list[tuple[int, int]] = []
-    for worker_id, proc in procs:
-        code = proc.wait()
-        if code != 0:
-            failed.append((worker_id, code))
+    exit_codes: Dict[int, int] = {}
+    started_at = time.monotonic()
+    next_progress_at = started_at
+    while len(exit_codes) < len(procs):
+        alive_workers = 0
+        for worker_id, proc in procs:
+            if worker_id in exit_codes:
+                continue
+            code = proc.poll()
+            if code is None:
+                alive_workers += 1
+            else:
+                exit_codes[worker_id] = int(code)
+                if code != 0:
+                    failed.append((worker_id, int(code)))
+        now = time.monotonic()
+        if now >= next_progress_at or len(exit_codes) == len(procs):
+            _print_progress(plan, alive_workers=alive_workers, started_at=started_at)
+            next_progress_at = now + 30.0
+        if len(exit_codes) < len(procs):
+            time.sleep(5.0)
     if not failed:
         return 0
     for worker_id, code in failed:
