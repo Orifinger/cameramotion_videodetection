@@ -44,6 +44,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "gpu": {
         "worker_groups": 4,
         "gpus_per_worker": 4,
+        "workers_per_gpu": 1,
         "fallback_topologies": [{"worker_groups": 2, "gpus_per_worker": 8}],
         "telemetry_interval_seconds": 10,
         "min_aggregate_vram_ratio": 0.50,
@@ -95,6 +96,7 @@ def apply_cli_overrides(
     resume: bool | None = None,
     allow_reshard: bool | None = None,
     topology: str | None = None,
+    workers_per_gpu: int | None = None,
 ) -> Dict[str, Any]:
     out = deepcopy(config)
     if execution_plan is not None:
@@ -116,4 +118,9 @@ def apply_cli_overrides(
             out["gpu"]["gpus_per_worker"] = int(gpus)
         except Exception as exc:  # noqa: BLE001
             raise DataAError(f"invalid topology '{topology}', expected like 4x4 or 2x8") from exc
+    if workers_per_gpu is not None:
+        if workers_per_gpu <= 0:
+            raise DataAError(f"invalid workers_per_gpu '{workers_per_gpu}', expected a positive integer")
+        out["gpu"]["workers_per_gpu"] = int(workers_per_gpu)
+        out["gpu"].pop("batch_size", None)
     return out

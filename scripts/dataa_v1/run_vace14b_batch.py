@@ -195,6 +195,7 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
         resume=args.resume,
         allow_reshard=args.allow_reshard,
         topology=args.topology,
+        workers_per_gpu=getattr(args, "workers_per_gpu", None),
     )
     execute = bool(args.execute)
     execution_plan_path = _resolve_execution_plan(args, config, execute=execute)
@@ -341,7 +342,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--allow-reshard", action="store_true", default=None)
     parser.add_argument("--case-id", default=None)
     parser.add_argument("--max-cases", type=int, default=None)
-    parser.add_argument("--topology", choices=["4x4", "2x8"], default=None)
+    parser.add_argument("--topology", default=None, help="GPU topology as worker_groups x gpus_per_worker, e.g. 4x4, 2x8, 16x1.")
+    parser.add_argument(
+        "--workers-per-gpu",
+        "--batch-size",
+        dest="workers_per_gpu",
+        type=int,
+        default=None,
+        help="Launch this many worker groups on each physical GPU group. --batch-size is an alias for this worker-level concurrency.",
+    )
     parser.add_argument("--launch-workers", action="store_true", help="Actually launch persistent torchrun worker groups after planning.")
     return parser.parse_args(argv)
 

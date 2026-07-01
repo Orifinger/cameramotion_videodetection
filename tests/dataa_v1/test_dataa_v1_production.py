@@ -7,7 +7,7 @@ import shutil
 import numpy as np
 import pytest
 
-from scripts.dataa_v1.common import DataAError, read_json, write_json
+from scripts.dataa_v1.common import read_json, write_json
 from scripts.dataa_v1.config import DEFAULT_CONFIG, apply_cli_overrides
 from scripts.dataa_v1.execution_plan import load_execution_plan, validate_execution_cases
 from scripts.dataa_v1.gpu_telemetry import aggregate_vram_ratio, parse_nvidia_smi_csv, summarize_telemetry
@@ -74,6 +74,36 @@ def test_default_topology_4x4_and_fallback_2x8() -> None:
     assert fallback.name == "2x8"
     assert fallback.is_fallback
     assert fallback.groups[0].nproc_per_node == 8
+
+
+def test_topology_workers_per_gpu_reuses_physical_devices(tmp_path: Path) -> None:
+    cfg = dict(DEFAULT_CONFIG["gpu"])
+    cfg.update({"worker_groups": 16, "gpus_per_worker": 1, "workers_per_gpu": 2})
+    topology = build_topology(cfg, available_gpu_count=16)
+    assert topology.name == "16x1w2"
+    assert topology.total_gpus == 16
+    assert topology.worker_groups == 32
+    assert len(topology.groups) == 32
+    assert topology.groups[0].cuda_visible_devices == (0,)
+    assert topology.groups[1].cuda_visible_devices == (0,)
+    assert topology.groups[2].cuda_visible_devices == (1,)
+
+    command = build_worker_command(
+        group=topology.groups[0],
+        config_path=tmp_path / "config.yaml",
+        shard_path=tmp_path / "shard.json",
+        run_id="run_1",
+    )
+    assert "--nproc_per_node=1" in command["argv"]
+    assert command["vace_distributed_flags"] == {"dit_fsdp": False, "t5_fsdp": False, "ulysses_size": 1, "ring_size": 1}
+
+
+def test_topology_batch_size_alias_sets_workers_per_gpu() -> None:
+    cfg = dict(DEFAULT_CONFIG["gpu"])
+    cfg.update({"worker_groups": 16, "gpus_per_worker": 1, "batch_size": 2})
+    topology = build_topology(cfg, available_gpu_count=16)
+    assert topology.name == "16x1w2"
+    assert topology.worker_groups == 32
 
 
 def test_project_relative_execution_plan_resolves_under_repo_res() -> None:
@@ -146,6 +176,19 @@ def test_run_state_resume_skips_uploaded_terminal_case(tmp_path: Path) -> None:
     state.append_status("case_a", "uploaded_verified", worker_id=0, detail={"upload_receipt": "receipt"})
     assert state.should_skip_case("case_a")
     assert not state.should_skip_case("case_b")
+
+
+def test_run_state_recovers_from_invalid_json_using_status_log(tmp_path: Path) -> None:
+    paths = RunPaths.from_root(tmp_path, "run")
+    state = RunState(paths, run_id="run", topology={"name": "4x4"})
+    state.append_status("case_a", "uploaded_verified", worker_id=0, detail={"upload_receipt": "receipt"})
+    paths.run_state_path.write_text("", encoding="utf-8")
+
+    recovered = state.load()
+
+    assert recovered["cases"]["case_a"]["status"] == "uploaded_verified"
+    assert recovered["invalid_run_state_backup"].endswith(".json")
+    assert state.should_skip_case("case_a")
 
 
 def test_batch_plan_lineage_accumulates_plan_index_for_same_run_id(tmp_path: Path) -> None:

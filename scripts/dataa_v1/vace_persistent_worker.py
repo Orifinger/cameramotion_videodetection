@@ -151,10 +151,12 @@ def run_worker(*, config_path: Path, shard_path: Path, worker_id: int, run_id: s
         (item for item in (shard.get("topology", {}).get("groups") or []) if int(item.get("worker_id", -1)) == worker_id),
         {},
     )
-    config["vace"]["ulysses_size"] = int(group_cfg.get("ulysses_size", config["vace"].get("ulysses_size", 4)))
-    config["vace"]["ring_size"] = int(group_cfg.get("ring_size", config["vace"].get("ring_size", 1)))
-    config["vace"]["t5_fsdp"] = True
-    config["vace"]["dit_fsdp"] = True
+    nproc_per_node = int(group_cfg.get("nproc_per_node", os.environ.get("WORLD_SIZE", 1)))
+    distributed_group = nproc_per_node > 1
+    config["vace"]["ulysses_size"] = int(group_cfg.get("ulysses_size", nproc_per_node if distributed_group else 1))
+    config["vace"]["ring_size"] = int(group_cfg.get("ring_size", 1))
+    config["vace"]["t5_fsdp"] = distributed_group
+    config["vace"]["dit_fsdp"] = distributed_group
     if bool(config["vace"].get("offload_model", False)) or bool(config["vace"].get("t5_cpu", False)):
         raise DataAError("blocked_slow_memory_mode: offload_model and t5_cpu must both be false")
     runtime = PersistentVaceRuntime(config["vace"])

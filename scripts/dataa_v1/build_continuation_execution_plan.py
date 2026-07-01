@@ -456,6 +456,47 @@ def _case_index_row(case_payload: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _forced_vace_model_plan(model_name: str) -> Dict[str, Any]:
+    if model_name == "vace-1.3B":
+        return {
+            "model_name": "vace-1.3B",
+            "size": "480p",
+            "profile": "production_480",
+            "reason": "forced_continuation_model_for_remaining_cases",
+            "prompt_extension": "plain",
+            "offload_model": False,
+            "t5_cpu": False,
+        }
+    if model_name == "vace-14B":
+        return {
+            "model_name": "vace-14B",
+            "size": "720p",
+            "profile": "production_720",
+            "reason": "forced_continuation_model_for_remaining_cases",
+            "prompt_extension": "plain",
+            "offload_model": False,
+            "t5_cpu": False,
+        }
+    raise DataAError(f"unsupported --force-model value: {model_name}")
+
+
+def _apply_forced_model_plan(case_payload: Dict[str, Any], force_model: str | None) -> None:
+    if not force_model:
+        return
+    meta = case_payload.setdefault("sampling_meta", {})
+    previous = dict(meta.get("vace_model_plan") or {})
+    forced = _forced_vace_model_plan(force_model)
+    forced["forced_model_override"] = True
+    forced["previous_model_plan"] = previous
+    meta["vace_model_plan"] = forced
+    meta["model_force"] = {
+        "enabled": True,
+        "source": "scripts/dataa_v1/build_continuation_execution_plan.py",
+        "forced_model_name": force_model,
+        "previous_model_name": previous.get("model_name"),
+    }
+
+
 def _mark_reserve_case(case_payload: Dict[str, Any], *, reason: str, occupied_video_id: str | None) -> None:
     meta = case_payload.setdefault("sampling_meta", {})
     meta["continuation_reserve"] = {
@@ -500,6 +541,7 @@ def build_continuation_plan(
     ffprobe_bin: str = "ffprobe",
     num_workers: int = 1,
     progress_every: int = 0,
+    force_model: str | None = None,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     config = load_selection_config(selection_config)
@@ -557,6 +599,7 @@ def build_continuation_plan(
             rerun_candidates.append(rerun)
             skipped.append(rerun)
             continue
+        _apply_forced_model_plan(new_case, force_model)
         new_video_id = str((new_case.get("target") or {}).get("video_id") or video_id)
         if new_video_id in completed_video_ids:
             skip = {"case_id": case.case_id, "video_id": new_video_id, "reason": "continuation_repaired_video_already_completed"}
@@ -608,6 +651,7 @@ def build_continuation_plan(
     summary["continuation_model_counts"] = dict(Counter(_case_model_name(case) for case in cases))
     summary["reserve_operation_counts"] = dict(Counter(str(case.get("operation") or "<missing>") for case in reserve_cases))
     summary["reserve_model_counts"] = dict(Counter(_case_model_name(case) for case in reserve_cases))
+    summary["force_model"] = force_model
     summary["qwen_sam3_rerun_candidate_count"] = len(rerun_candidates)
     summary["qwen_sam3_rerun_reason_counts"] = dict(Counter(str(item.get("reason") or "<missing>") for item in rerun_candidates))
     kept_cases = [_case_index_row(case) for case in cases]
@@ -628,6 +672,7 @@ def build_continuation_plan(
     payload["completed_case_ids"] = sorted(completed_case_ids)
     payload["completed_video_ids"] = sorted(completed_video_ids)
     payload["reserved_same_video_case_ids"] = [str(case.get("case_id")) for case in reserve_cases if case.get("case_id")]
+    payload["force_model"] = force_model
 
     vace14b_payload = _plan_payload(
         schema_version="dataA_v1_frozen_subject_first_vace14b_continuation_plan_v1",
@@ -647,6 +692,8 @@ def build_continuation_plan(
         validation=vace13b_validation,
         cases=vace13b_cases,
     )
+    vace14b_payload["force_model"] = force_model
+    vace13b_payload["force_model"] = force_model
     reserve_payload = _plan_payload(
         schema_version="dataA_v1_frozen_subject_first_vace_continuation_reserve_plan_v1",
         track_bank=track_bank,
@@ -657,6 +704,7 @@ def build_continuation_plan(
         cases=reserve_cases,
     )
     reserve_payload["run_roots"] = [str(path) for path in run_roots]
+    reserve_payload["force_model"] = force_model
     reserve_vace14b_payload = _plan_payload(
         schema_version="dataA_v1_frozen_subject_first_vace14b_continuation_reserve_plan_v1",
         track_bank=track_bank,
@@ -675,12 +723,15 @@ def build_continuation_plan(
         validation=reserve_vace13b_validation,
         cases=reserve_vace13b_cases,
     )
+    reserve_vace14b_payload["force_model"] = force_model
+    reserve_vace13b_payload["force_model"] = force_model
     audit = {
         "schema_version": "dataA_v1_subject_first_continuation_audit_v1",
         "generated_at_utc": utc_now_iso(),
         "track_bank": str(track_bank),
         "base_plan": str(base_plan),
         "run_roots": [str(path) for path in run_roots],
+        "force_model": force_model,
         "summary": summary,
         "validation": validation,
         "vace14b_validation": vace14b_validation,
@@ -710,6 +761,7 @@ def build_continuation_plan(
             "rerun_other_unfinished_cases": True,
             "same_video_conflicts_go_to_reserve_plan": True,
             "rerun_scope": "unfinished_cases_only",
+            "force_model": force_model,
         },
         "summary": {
             "rerun_candidate_count": len(rerun_candidates),
@@ -779,6 +831,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--ffprobe-bin", default="ffprobe")
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--progress-every", type=int, default=0)
+    parser.add_argument(
+        "--force-model",
+        choices=["vace-14B", "vace-1.3B"],
+        default=None,
+        help="Freeze all newly built continuation cases to this VACE model plan.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
 
@@ -803,6 +861,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ffprobe_bin=args.ffprobe_bin,
             num_workers=max(1, int(args.num_workers)),
             progress_every=max(0, int(args.progress_every)),
+            force_model=args.force_model,
             dry_run=bool(args.dry_run),
         )
     except DataAError as exc:

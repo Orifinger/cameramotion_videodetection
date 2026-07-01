@@ -6,9 +6,11 @@ This module intentionally contains no model or generation code.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 from typing import Any, Mapping
 
 
@@ -43,10 +45,16 @@ def to_jsonable(value: Any) -> Any:
 
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(to_jsonable(payload), ensure_ascii=False, indent=2, sort_keys=False) + "\n",
-        encoding="utf-8",
-    )
+    text = json.dumps(to_jsonable(payload), ensure_ascii=False, indent=2, sort_keys=False) + "\n"
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def normalize_prefix(value: str) -> str:
@@ -61,4 +69,3 @@ def path_has_prefix(path: str, prefix: str) -> bool:
 
 def is_local_path(path: str) -> bool:
     return not path.startswith(("oss://", "s3://", "http://", "https://"))
-

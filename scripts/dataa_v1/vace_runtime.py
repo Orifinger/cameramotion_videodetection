@@ -107,8 +107,9 @@ class PersistentVaceRuntime:
         t5_fsdp = bool(self.config.get("t5_fsdp", True))
         dit_fsdp = bool(self.config.get("dit_fsdp", True))
 
-        if world_size > 1:
+        if torch.cuda.is_available():
             torch.cuda.set_device(local_rank)
+        if world_size > 1:
             if not dist.is_initialized():
                 dist.init_process_group(backend="nccl", init_method="env://", rank=rank, world_size=world_size)
         elif t5_fsdp or dit_fsdp or ulysses_size > 1 or ring_size > 1:
@@ -238,8 +239,8 @@ def build_single_job_args(job: VaceJob, config: Mapping[str, Any]) -> Dict[str, 
         "offload_model": False,
         "ulysses_size": int(config.get("ulysses_size", 4)),
         "ring_size": int(config.get("ring_size", 1)),
-        "t5_fsdp": True,
-        "dit_fsdp": True,
+        "t5_fsdp": bool(config.get("t5_fsdp", True)),
+        "dit_fsdp": bool(config.get("dit_fsdp", True)),
         "save_file": job.output_path,
         "src_video": job.source_clip,
         "src_mask": job.target_mask_gen_video,

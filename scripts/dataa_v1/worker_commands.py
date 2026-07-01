@@ -31,9 +31,10 @@ def build_worker_command(
         "--run-id",
         run_id,
     ]
+    distributed = group.nproc_per_node > 1
     vace_flags = {
-        "dit_fsdp": True,
-        "t5_fsdp": True,
+        "dit_fsdp": distributed,
+        "t5_fsdp": distributed,
         "ulysses_size": group.ulysses_size,
         "ring_size": group.ring_size,
     }
