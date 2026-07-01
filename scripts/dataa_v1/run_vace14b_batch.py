@@ -335,7 +335,6 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
 def launch_workers(plan: Dict[str, Any]) -> int:
     commands = plan.get("worker_commands", [])
     procs = []
-    handles = []
     logs_dir = Path(str(plan.get("coordinator_dir") or Path(str(plan.get("run_root", "."))) / "coordinator")) / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     for command in commands:
@@ -352,30 +351,17 @@ def launch_workers(plan: Dict[str, Any]) -> int:
         worker_id = int(command.get("worker_id", len(procs)))
         env["PYTHONUNBUFFERED"] = "1"
         env["TORCHELASTIC_ERROR_FILE"] = str(logs_dir / f"worker_{worker_id:02d}.torchelastic_error.json")
-        log_path = logs_dir / f"worker_{worker_id:02d}.launch.log"
-        handle = log_path.open("a", encoding="utf-8")
-        handles.append(handle)
-        print(f"launching worker_{worker_id:02d}, log={log_path}")
-        procs.append((worker_id, log_path, subprocess.Popen(command["argv"], env=env, stdout=handle, stderr=subprocess.STDOUT)))
-    failed: list[tuple[int, Path, int]] = []
-    try:
-        for worker_id, log_path, proc in procs:
-            code = proc.wait()
-            if code != 0:
-                failed.append((worker_id, log_path, code))
-    finally:
-        for handle in handles:
-            handle.close()
+        print(f"launching worker_{worker_id:02d}")
+        procs.append((worker_id, subprocess.Popen(command["argv"], env=env)))
+    failed: list[tuple[int, int]] = []
+    for worker_id, proc in procs:
+        code = proc.wait()
+        if code != 0:
+            failed.append((worker_id, code))
     if not failed:
         return 0
-    print(f"worker failure count={len(failed)}; showing log tails for first failures", file=sys.stderr)
-    for worker_id, log_path, code in failed[:4]:
-        print(f"\n--- worker_{worker_id:02d} exit={code} log={log_path} ---", file=sys.stderr)
-        try:
-            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-            print("\n".join(lines[-80:]), file=sys.stderr)
-        except OSError as exc:
-            print(f"could not read worker log: {exc}", file=sys.stderr)
+    for worker_id, code in failed:
+        print(f"worker_{worker_id:02d} exited with code {code}", file=sys.stderr)
     return 1
 
 
