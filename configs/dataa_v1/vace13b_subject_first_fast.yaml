@@ -21,7 +21,7 @@ vace:
   ffprobe_bin: /input/tmp/ffmpeg/ffmpeg-7.0.2-amd64-static/ffprobe
   torchrun_bin: torchrun
   sample_solver: unipc
-  sample_steps: 30
+  sample_steps: 16
   sample_shift: 16
   sample_guide_scale: 5.0
   use_prompt_extend: plain
@@ -32,7 +32,7 @@ vace:
 gpu:
   worker_groups: 16
   gpus_per_worker: 1
-  workers_per_gpu: 2
+  workers_per_gpu: 1
   fallback_topologies:
     - worker_groups: 8
       gpus_per_worker: 2
