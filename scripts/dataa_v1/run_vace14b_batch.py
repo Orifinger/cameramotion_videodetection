@@ -208,9 +208,28 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
     validate_topology_for_resume((previous or {}).get("topology"), topology, allow_reshard=bool(config["execution"].get("allow_reshard")))
 
     runtime_report = check_runtime(config, topology, execution_plan=execution_plan_path, strict=False)
+    if execute:
+        critical_checks = {
+            "vace_vendored_source",
+            "checkpoint_dir",
+            "ffmpeg",
+            "ffprobe",
+            "torchrun",
+            "execution_plan",
+            "tmp_root_writable",
+        }
+        failed = [
+            f"{name}={item.get('detail')}"
+            for name, item in (runtime_report.get("checks") or {}).items()
+            if name in critical_checks and not bool(item.get("ok"))
+        ]
+        if failed:
+            raise DataAError(f"runtime preflight failed before worker launch: {failed}")
     plan_report: Dict[str, Any] = {
         "run_id": run_id,
         "execute": execute,
+        "run_root": str(paths.run_root),
+        "coordinator_dir": str(paths.coordinator_dir),
         "execution_plan": str(execution_plan_path) if execution_plan_path else None,
         "full_plan_search_result": "found" if execution_plan_path else "missing_frozen_full_execution_plan",
         "topology": topology_payload(topology),
@@ -316,6 +335,9 @@ def plan_batch(args: argparse.Namespace) -> Dict[str, Any]:
 def launch_workers(plan: Dict[str, Any]) -> int:
     commands = plan.get("worker_commands", [])
     procs = []
+    handles = []
+    logs_dir = Path(str(plan.get("coordinator_dir") or Path(str(plan.get("run_root", "."))) / "coordinator")) / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
     for command in commands:
         env = None
         if command.get("env"):
@@ -323,9 +345,38 @@ def launch_workers(plan: Dict[str, Any]) -> int:
 
             env = os.environ.copy()
             env.update(command["env"])
-        procs.append(subprocess.Popen(command["argv"], env=env))
-    exit_codes = [proc.wait() for proc in procs]
-    return 0 if all(code == 0 for code in exit_codes) else 1
+        else:
+            import os
+
+            env = os.environ.copy()
+        worker_id = int(command.get("worker_id", len(procs)))
+        env["PYTHONUNBUFFERED"] = "1"
+        env["TORCHELASTIC_ERROR_FILE"] = str(logs_dir / f"worker_{worker_id:02d}.torchelastic_error.json")
+        log_path = logs_dir / f"worker_{worker_id:02d}.launch.log"
+        handle = log_path.open("a", encoding="utf-8")
+        handles.append(handle)
+        print(f"launching worker_{worker_id:02d}, log={log_path}")
+        procs.append((worker_id, log_path, subprocess.Popen(command["argv"], env=env, stdout=handle, stderr=subprocess.STDOUT)))
+    failed: list[tuple[int, Path, int]] = []
+    try:
+        for worker_id, log_path, proc in procs:
+            code = proc.wait()
+            if code != 0:
+                failed.append((worker_id, log_path, code))
+    finally:
+        for handle in handles:
+            handle.close()
+    if not failed:
+        return 0
+    print(f"worker failure count={len(failed)}; showing log tails for first failures", file=sys.stderr)
+    for worker_id, log_path, code in failed[:4]:
+        print(f"\n--- worker_{worker_id:02d} exit={code} log={log_path} ---", file=sys.stderr)
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            print("\n".join(lines[-80:]), file=sys.stderr)
+        except OSError as exc:
+            print(f"could not read worker log: {exc}", file=sys.stderr)
+    return 1
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:

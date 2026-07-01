@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
@@ -159,11 +160,13 @@ def run_worker(*, config_path: Path, shard_path: Path, worker_id: int, run_id: s
     config["vace"]["dit_fsdp"] = distributed_group
     if bool(config["vace"].get("offload_model", False)) or bool(config["vace"].get("t5_cpu", False)):
         raise DataAError("blocked_slow_memory_mode: offload_model and t5_cpu must both be false")
-    runtime = PersistentVaceRuntime(config["vace"])
-    runtime.initialize_once()
     paths = RunPaths.from_root(Path(config["run"]["tmp_root"]), run_id)
     state = RunState(paths, run_id=run_id, topology=shard.get("topology", {}))
     cases = shard.get("cases", [])
+    if not cases:
+        return 0
+    runtime = PersistentVaceRuntime(config["vace"])
+    runtime.initialize_once()
     attempts_root = paths.worker_dir(worker_id) / "attempts"
     execution_plan = Path(shard["execution_plan"])
     track_bank = Path(shard["track_bank"]) if shard.get("track_bank") else None
@@ -278,6 +281,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_worker(config_path=args.config, shard_path=args.shard, worker_id=args.worker_id, run_id=args.run_id)
     except DataAError as exc:
         print(str(exc), file=sys.stderr)
+        return 2
+    except Exception:  # noqa: BLE001
+        traceback.print_exc(file=sys.stderr)
         return 2
 
 
