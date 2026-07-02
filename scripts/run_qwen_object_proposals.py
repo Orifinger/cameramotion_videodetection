@@ -802,10 +802,13 @@ def inventory_entities_from_raw(raw: dict[str, Any]) -> tuple[list[Any], str]:
             for index, item in enumerate(sam3_candidates, start=1)
             if isinstance(item, dict)
         ], "sam3_candidates"
+    if any(key in raw for key in ("entity_id", "fine_type_raw", "sam3_prompt_phrase", "coarse_type")):
+        return [raw], "root_entity"
     keys = ", ".join(sorted(str(key) for key in raw.keys())[:30])
     raise ResponseFormatError(
         "Expected list field 'entities' or alias "
-        "'visible_entities'/'objects'/'object_inventory'/'inventory'/'items'/'sam3_candidates'; "
+        "'visible_entities'/'objects'/'object_inventory'/'inventory'/'items'/'sam3_candidates', "
+        "or a single root entity object; "
         f"top_level_keys=[{keys}]"
     )
 
@@ -1048,7 +1051,7 @@ async def infer_one(session: aiohttp.ClientSession, semaphore: asyncio.Semaphore
         "schema_version": SCHEMA_VERSION,
         "created_at_utc": utc_now(),
         "model": QWEN_MODEL_NAME,
-        "attempt_count": MAX_RETRIES,
+        "attempt_count": errors[-1]["attempt"] if errors else 0,
         "latency_seconds": round(time.perf_counter() - started, 3),
         "errors": errors,
     }
