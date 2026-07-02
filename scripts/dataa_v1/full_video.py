@@ -115,6 +115,87 @@ def _shape(meta: VideoMeta) -> Dict[str, Any]:
     return {"fps": meta.fps, "frame_count": meta.frame_count, "height": meta.height, "width": meta.width}
 
 
+def _same_fps_shape(a: VideoMeta, b: VideoMeta) -> bool:
+    return round(a.fps, 6) == round(b.fps, 6) and a.height == b.height and a.width == b.width
+
+
+def repair_one_frame_full_pair_mismatch(
+    *,
+    full_real: Path,
+    full_fake: Path,
+    ffmpeg_bin: str,
+    ffprobe_bin: str,
+    execute: bool = True,
+) -> Dict[str, Any]:
+    """Trim the longer full-video pair member when ffmpeg rounding leaves a 1-frame skew."""
+
+    real_meta = ffprobe_video(full_real, ffprobe_bin=ffprobe_bin)
+    fake_meta = ffprobe_video(full_fake, ffprobe_bin=ffprobe_bin)
+    if (round(real_meta.fps, 6), real_meta.frame_count, real_meta.height, real_meta.width) == (
+        round(fake_meta.fps, 6),
+        fake_meta.frame_count,
+        fake_meta.height,
+        fake_meta.width,
+    ):
+        return {
+            "status": "already_aligned",
+            "full_real": _shape(real_meta),
+            "full_fake": _shape(fake_meta),
+        }
+    if not _same_fps_shape(real_meta, fake_meta):
+        return {
+            "status": "not_repairable",
+            "reason": "fps_or_shape_mismatch",
+            "full_real": _shape(real_meta),
+            "full_fake": _shape(fake_meta),
+        }
+    diff = real_meta.frame_count - fake_meta.frame_count
+    if abs(diff) != 1:
+        return {
+            "status": "not_repairable",
+            "reason": f"frame_count_diff_not_one:{diff}",
+            "full_real": _shape(real_meta),
+            "full_fake": _shape(fake_meta),
+        }
+
+    target_count = min(real_meta.frame_count, fake_meta.frame_count)
+    trim_path = full_real if diff > 0 else full_fake
+    trim_label = "full_real" if diff > 0 else "full_fake"
+    if not execute:
+        return {
+            "status": "would_repair",
+            "action": f"trim_{trim_label}_last_frame",
+            "target_frame_count": target_count,
+            "before": {"full_real": _shape(real_meta), "full_fake": _shape(fake_meta)},
+        }
+    tmp_path = trim_path.with_name(f".{trim_path.stem}.trimmed_one_frame.{trim_path.suffix.lstrip('.')}")
+    try:
+        crop_video_frames(
+            source_video=trim_path,
+            out_path=tmp_path,
+            frame_count=target_count,
+            fps=real_meta.fps,
+            ffmpeg_bin=ffmpeg_bin,
+        )
+        tmp_path.replace(trim_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    repaired_real = ffprobe_video(full_real, ffprobe_bin=ffprobe_bin)
+    repaired_fake = ffprobe_video(full_fake, ffprobe_bin=ffprobe_bin)
+    _assert_full_pair(repaired_real, repaired_fake)
+    return {
+        "status": "repaired",
+        "action": f"trimmed_{trim_label}_last_frame",
+        "target_frame_count": target_count,
+        "before": {"full_real": _shape(real_meta), "full_fake": _shape(fake_meta)},
+        "after": {"full_real": _shape(repaired_real), "full_fake": _shape(repaired_fake)},
+    }
+
+
 def _assert_full_pair(real: VideoMeta, fake: VideoMeta) -> None:
     real_sig = (round(real.fps, 6), real.frame_count, real.height, real.width)
     fake_sig = (round(fake.fps, 6), fake.frame_count, fake.height, fake.width)
@@ -231,6 +312,14 @@ def reassemble_full_video_pair(
 
     real_meta = ffprobe_video(full_real_norm, ffprobe_bin=ffprobe_bin)
     fake_meta = ffprobe_video(full_fake, ffprobe_bin=ffprobe_bin)
+    alignment_repair = repair_one_frame_full_pair_mismatch(
+        full_real=full_real_norm,
+        full_fake=full_fake,
+        ffmpeg_bin=ffmpeg_bin,
+        ffprobe_bin=ffprobe_bin,
+    )
+    real_meta = ffprobe_video(full_real_norm, ffprobe_bin=ffprobe_bin)
+    fake_meta = ffprobe_video(full_fake, ffprobe_bin=ffprobe_bin)
     _assert_full_pair(real_meta, fake_meta)
     return {
         "status": "ok",
@@ -242,6 +331,7 @@ def reassemble_full_video_pair(
         "generation_fps": generation_fps,
         "full_fps": full_meta.fps,
         "shape": _shape(real_meta),
+        "alignment_repair": alignment_repair,
         "compositing": composite,
         "crop": crop,
         "donor_rgb_used": False,
