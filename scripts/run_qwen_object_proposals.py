@@ -469,6 +469,10 @@ class ProposalError(RuntimeError):
     """A model response cannot be converted into a valid proposal record."""
 
 
+class ResponseFormatError(ProposalError):
+    """The server answered, but the JSON shape does not match this profile."""
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -715,10 +719,99 @@ def normalize_proposal(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def first_clean_text(raw: dict[str, Any], keys: tuple[str, ...], limit: int) -> str:
+    for key in keys:
+        text = clean_text(raw.get(key), limit)
+        if text:
+            return text
+    return ""
+
+
+def coarse_type_from_text(text: str) -> str:
+    lowered = text.lower()
+    if any(word in lowered for word in ("person", "man", "woman", "boy", "girl", "human")):
+        return "person"
+    if any(word in lowered for word in ("dog", "cat", "horse", "bird", "animal")):
+        return "animal"
+    if any(word in lowered for word in ("car", "bus", "truck", "van", "bicycle", "motorcycle", "boat", "aircraft", "plane", "vehicle")):
+        return "vehicle"
+    if any(word in lowered for word in ("screen", "poster", "sign", "book", "paper", "map", "painting", "panel")):
+        return "surface"
+    if any(word in lowered for word in ("food", "fruit", "meal", "cake")):
+        return "food"
+    if any(word in lowered for word in ("plant", "tree", "flower")):
+        return "plant"
+    return "object" if lowered else "unknown"
+
+
+def inventory_operation_from_coarse_type(coarse_type: str) -> str:
+    if coarse_type == "person":
+        return "person_appearance_swap"
+    if coarse_type == "surface":
+        return "surface_content_edit"
+    if coarse_type in {"animal", "vehicle", "object", "food", "plant"}:
+        return "object_swap"
+    return "reserve"
+
+
+def inventory_entity_from_sam3_candidate(raw_item: dict[str, Any], index: int) -> dict[str, Any]:
+    candidate_class = clean_text(raw_item.get("candidate_class"), 80).lower()
+    fine_type = first_clean_text(
+        raw_item,
+        ("canonical_concept", "sam_prompt", "display_phrase", "candidate_class"),
+        120,
+    ).lower()
+    if candidate_class == "human":
+        coarse_type = "person"
+    elif candidate_class in {"display_screen", "sign_or_poster", "paper_book_map", "framed_art", "apparel_panel", "vehicle_panel", "package_front"}:
+        coarse_type = "surface"
+    elif candidate_class == "animal":
+        coarse_type = "animal"
+    elif candidate_class == "vehicle":
+        coarse_type = "vehicle"
+    else:
+        coarse_type = coarse_type_from_text(fine_type)
+    return {
+        "entity_id": clean_text(raw_item.get("candidate_id"), 64) or f"entity_{index:03d}",
+        "coarse_type": coarse_type,
+        "fine_type_raw": fine_type,
+        "visual_domain": "unclear",
+        "person_view": "unclear" if coarse_type == "person" else "not_person",
+        "salience": "unclear",
+        "foreground_status": "unclear",
+        "size_level": "unclear",
+        "visibility": "unclear",
+        "edit_suitability": "maybe",
+        "donor_suitability": "maybe",
+        "sam3_prompt_phrase": first_clean_text(raw_item, ("sam_prompt", "canonical_concept", "display_phrase"), 120) or fine_type,
+        "suggested_operation": inventory_operation_from_coarse_type(coarse_type),
+        "notes": clean_text(raw_item.get("display_phrase"), 300),
+        "uncertain_reason": "converted_from_sam3_candidates_fallback",
+    }
+
+
+def inventory_entities_from_raw(raw: dict[str, Any]) -> tuple[list[Any], str]:
+    for key in ("entities", "visible_entities", "objects", "object_inventory", "inventory", "items"):
+        value = raw.get(key)
+        if isinstance(value, list):
+            return value, key
+    sam3_candidates = raw.get("sam3_candidates")
+    if isinstance(sam3_candidates, list):
+        return [
+            inventory_entity_from_sam3_candidate(item, index)
+            for index, item in enumerate(sam3_candidates, start=1)
+            if isinstance(item, dict)
+        ], "sam3_candidates"
+    keys = ", ".join(sorted(str(key) for key in raw.keys())[:30])
+    raise ResponseFormatError(
+        "Expected list field 'entities' or alias "
+        "'visible_entities'/'objects'/'object_inventory'/'inventory'/'items'/'sam3_candidates'; "
+        f"top_level_keys=[{keys}]"
+    )
+
+
 def normalize_inventory_proposal(raw: dict[str, Any]) -> dict[str, Any]:
-    raw_entities = raw.get("entities")
-    if not isinstance(raw_entities, list):
-        raise ProposalError("Expected list field 'entities'.")
+    raw_entities, entity_source_field = inventory_entities_from_raw(raw)
     normalized_profile = PROMPT_PROFILE == "normalized_inventory_v2"
     entities: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
@@ -732,9 +825,21 @@ def normalize_inventory_proposal(raw: dict[str, Any]) -> dict[str, Any]:
         entity_id = raw_id or f"entity_{len(entities) + 1:03d}"
         if entity_id in seen_ids:
             entity_id = f"entity_{len(entities) + 1:03d}"
-        coarse_type = enum_or_default(raw_item.get("coarse_type"), ALLOWED_INVENTORY_COARSE_TYPES, "unknown")
-        fine_type_raw = clean_text(raw_item.get("fine_type_raw"), 120).lower()
-        prompt = clean_text(raw_item.get("sam3_prompt_phrase"), 120)
+        fine_type_raw = first_clean_text(
+            raw_item,
+            ("fine_type_raw", "fine_type", "class", "category", "type", "name", "object_name", "canonical_concept", "description"),
+            120,
+        ).lower()
+        prompt = first_clean_text(
+            raw_item,
+            ("sam3_prompt_phrase", "sam_prompt", "prompt", "canonical_concept", "name", "object_name", "fine_type_raw", "description"),
+            120,
+        )
+        coarse_type = enum_or_default(
+            raw_item.get("coarse_type") or raw_item.get("coarse_category") or raw_item.get("category_type"),
+            ALLOWED_INVENTORY_COARSE_TYPES,
+            coarse_type_from_text(fine_type_raw or prompt),
+        )
         if not fine_type_raw and not prompt:
             rejections.append({"entity_id": entity_id, "reason": "missing_fine_type_and_sam3_prompt"})
             continue
@@ -773,6 +878,7 @@ def normalize_inventory_proposal(raw: dict[str, Any]) -> dict[str, Any]:
         "scene_summary": clean_text(raw.get("scene_summary"), 400),
         "entities": entities,
         "no_editable_entity_reason": clean_text(raw.get("no_editable_entity_reason"), 200) or None,
+        "entity_source_field": entity_source_field,
         "parser_rejections": rejections,
     }
 
@@ -929,6 +1035,8 @@ async def infer_one(session: aiohttp.ClientSession, semaphore: asyncio.Semaphore
                 }
             except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError, ProposalError) as exc:
                 errors.append({"attempt": attempt, "error_type": type(exc).__name__, "message": str(exc)[:2000]})
+                if isinstance(exc, ResponseFormatError):
+                    break
                 if attempt < MAX_RETRIES:
                     await asyncio.sleep(min(30.0, 2.0 ** (attempt - 1)))
 
