@@ -12,6 +12,21 @@ def _label(value: str | None, fallback: str) -> str:
 
 
 def build_prompts(case: CanonicalCaseSpec) -> Dict[str, str]:
+    text_edit_policy = case.sampling_meta.get("text_edit_policy") or {}
+    override_model = text_edit_policy.get("model_prompt")
+    override_control = text_edit_policy.get("control_prompt")
+    if override_model:
+        return {
+            "model_prompt": str(override_model),
+            "control_prompt": str(override_control)
+            if override_control
+            else (
+                "Edit only the target mask tube and a reasonable boundary band. Preserve background, camera motion, "
+                "pose, scene geometry, lighting, all non-edit regions, and temporal continuity. No donor RGB or "
+                "external reference image is used for this text-driven edit."
+            ),
+        }
+
     target_name = _label(case.target.display_phrase or case.target.canonical_concept, "the target object")
     donor_name = _label(
         (case.donor.display_phrase or case.donor.canonical_concept) if case.donor else None,

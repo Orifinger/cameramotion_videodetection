@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -271,6 +272,65 @@ def _materialize_masks(
     }
 
 
+def _materialize_pair_assets(
+    *,
+    pair: Mapping[str, Any],
+    pair_dir: Path,
+    source_video_path: Path,
+    source_video_dataset: Path,
+    reference_path: Path,
+    reference_alpha_path: Path,
+    selected: Mapping[str, Any],
+    donor: Mapping[str, Any] | None,
+    mask_policy: Mapping[str, Any],
+    prefer_hardlink: bool,
+    ffmpeg_bin: str,
+    ffprobe_bin: str,
+) -> dict[str, Any]:
+    source_link = _copy_or_link(source_video_path, source_video_dataset, prefer_hardlink=prefer_hardlink)
+    video_meta = ffprobe_video(source_video_path, ffprobe_bin=ffprobe_bin)
+    materialized: dict[str, Any] = {
+        "status": "materialized",
+        "source_video": source_link,
+        "source_video_meta": {
+            "fps": video_meta.fps,
+            "frame_count": video_meta.frame_count,
+            "height": video_meta.height,
+            "width": video_meta.width,
+            "duration": video_meta.duration,
+        },
+    }
+    materialized["masks"] = _materialize_masks(
+        pair_dir=pair_dir,
+        target_track=selected,
+        donor_track=donor,
+        mask_policy=mask_policy,
+        ffmpeg_bin=ffmpeg_bin,
+        source_fps=video_meta.fps,
+    )
+    if donor is not None:
+        donor_video = _video_path(donor)
+        donor_mask = _mask_path(donor)
+        if donor_video is None or donor_mask is None:
+            raise DataAError(f"blocked_donor_reference_missing_input:{_track_id(donor)}")
+        donor_ref = export_donor_reference_from_video(
+            out_dir=pair_dir,
+            tube=load_mask_tube(donor_mask),
+            donor_video_path=str(donor_video),
+            ffmpeg_bin=ffmpeg_bin,
+        )
+        os.replace(pair_dir / "donor_reference.png", reference_path)
+        os.replace(pair_dir / "donor_reference_alpha.png", reference_alpha_path)
+        donor_ref["donor_reference"] = str(reference_path)
+        donor_ref["donor_reference_alpha"] = str(reference_alpha_path)
+        materialized["donor_reference"] = donor_ref
+    output = dict(pair)
+    output["materialization"] = materialized
+    write_json(pair_dir / "pair_meta.json", output)
+    write_json(pair_dir / "vace_case_spec.json", output)
+    return output
+
+
 def _completed_usage(run_roots: Sequence[Path]) -> dict[str, Any]:
     used_target_videos: set[str] = set()
     used_donor_videos: Counter[str] = Counter()
@@ -322,9 +382,12 @@ def build_pairing_dataset(
     execute: bool = False,
     prefer_hardlink: bool = True,
     max_pairs: int | None = None,
+    num_workers: int = 1,
     ffmpeg_bin: str = "ffmpeg",
     ffprobe_bin: str = "ffprobe",
 ) -> dict[str, Any]:
+    if num_workers < 1:
+        raise DataAError("--num-workers must be >= 1")
     entities = _load_inventory_entities(inventory)
     tracks = as_records(read_json(track_bank), TRACK_LIST_KEYS, "SAM3 track-bank")
     _ = read_json(taxonomy)
@@ -370,6 +433,7 @@ def build_pairing_dataset(
         donors_by_group[track["_compatibility_group"]].append(track)
 
     pairs: list[dict[str, Any]] = []
+    materialize_jobs: list[dict[str, Any]] = []
     audit_rows: list[dict[str, Any]] = []
     for video_id in sorted(tracks_by_video):
         if used_target_videos[video_id] >= target_video_max_use:
@@ -433,44 +497,6 @@ def build_pairing_dataset(
         source_video_dataset = pair_dir / "source_video.mp4"
         reference_path = pair_dir / "reference.png"
         reference_alpha_path = pair_dir / "reference_alpha.png"
-        if execute:
-            source_link = _copy_or_link(source_video_path, source_video_dataset, prefer_hardlink=prefer_hardlink)
-            video_meta = ffprobe_video(source_video_path, ffprobe_bin=ffprobe_bin)
-            materialized = {
-                "status": "materialized",
-                "source_video": source_link,
-                "source_video_meta": {
-                    "fps": video_meta.fps,
-                    "frame_count": video_meta.frame_count,
-                    "height": video_meta.height,
-                    "width": video_meta.width,
-                    "duration": video_meta.duration,
-                },
-            }
-            materialized["masks"] = _materialize_masks(
-                pair_dir=pair_dir,
-                target_track=selected,
-                donor_track=donor,
-                mask_policy=mask_policy,
-                ffmpeg_bin=ffmpeg_bin,
-                source_fps=video_meta.fps,
-            )
-            if donor is not None:
-                donor_video = _video_path(donor)
-                donor_mask = _mask_path(donor)
-                if donor_video is None or donor_mask is None:
-                    raise DataAError(f"blocked_donor_reference_missing_input:{_track_id(donor)}")
-                donor_ref = export_donor_reference_from_video(
-                    out_dir=pair_dir,
-                    tube=load_mask_tube(donor_mask),
-                    donor_video_path=str(donor_video),
-                    ffmpeg_bin=ffmpeg_bin,
-                )
-                os.replace(pair_dir / "donor_reference.png", reference_path)
-                os.replace(pair_dir / "donor_reference_alpha.png", reference_alpha_path)
-                donor_ref["donor_reference"] = str(reference_path)
-                donor_ref["donor_reference_alpha"] = str(reference_alpha_path)
-                materialized["donor_reference"] = donor_ref
         pair = {
             "case_id": case_id,
             "operation": operation,
@@ -515,8 +541,36 @@ def build_pairing_dataset(
             "materialization": materialized,
         }
         if execute:
-            write_json(pair_dir / "pair_meta.json", pair)
-            write_json(pair_dir / "vace_case_spec.json", pair)
+            if num_workers == 1:
+                pair = _materialize_pair_assets(
+                    pair=pair,
+                    pair_dir=pair_dir,
+                    source_video_path=source_video_path,
+                    source_video_dataset=source_video_dataset,
+                    reference_path=reference_path,
+                    reference_alpha_path=reference_alpha_path,
+                    selected=selected,
+                    donor=donor,
+                    mask_policy=mask_policy,
+                    prefer_hardlink=prefer_hardlink,
+                    ffmpeg_bin=ffmpeg_bin,
+                    ffprobe_bin=ffprobe_bin,
+                )
+            else:
+                materialize_jobs.append(
+                    {
+                        "pair_index": len(pairs),
+                        "pair": pair,
+                        "pair_dir": pair_dir,
+                        "source_video_path": source_video_path,
+                        "source_video_dataset": source_video_dataset,
+                        "reference_path": reference_path,
+                        "reference_alpha_path": reference_alpha_path,
+                        "selected": selected,
+                        "donor": donor,
+                        "mask_policy": mask_policy,
+                    }
+                )
         pairs.append(pair)
         used_target_videos[video_id] += 1
         if donor is not None:
@@ -524,6 +578,36 @@ def build_pairing_dataset(
             used_donor_videos[_video_id(donor)] += 1
         if max_pairs is not None and len(pairs) >= max_pairs:
             break
+
+    if execute and num_workers > 1 and materialize_jobs:
+        print(f"pairing_dataset materialize workers={num_workers} jobs={len(materialize_jobs)}", flush=True)
+        with ThreadPoolExecutor(max_workers=num_workers) as pool:
+            futures = {
+                pool.submit(
+                    _materialize_pair_assets,
+                    pair=job["pair"],
+                    pair_dir=job["pair_dir"],
+                    source_video_path=job["source_video_path"],
+                    source_video_dataset=job["source_video_dataset"],
+                    reference_path=job["reference_path"],
+                    reference_alpha_path=job["reference_alpha_path"],
+                    selected=job["selected"],
+                    donor=job["donor"],
+                    mask_policy=job["mask_policy"],
+                    prefer_hardlink=prefer_hardlink,
+                    ffmpeg_bin=ffmpeg_bin,
+                    ffprobe_bin=ffprobe_bin,
+                ): int(job["pair_index"])
+                for job in materialize_jobs
+            }
+            for completed_count, future in enumerate(as_completed(futures), start=1):
+                pair_index = futures[future]
+                pairs[pair_index] = future.result()
+                if completed_count == 1 or completed_count % 25 == 0 or completed_count == len(materialize_jobs):
+                    print(
+                        f"pairing_dataset materialized {completed_count}/{len(materialize_jobs)}",
+                        flush=True,
+                    )
 
     summary = {
         "execute": execute,
@@ -580,6 +664,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-audit", type=Path, default=DEFAULT_OUT_AUDIT)
     parser.add_argument("--completed-run-root", type=Path, action="append", default=[])
     parser.add_argument("--max-pairs", type=int, default=None)
+    parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--copy-instead-of-hardlink", action="store_true")
     parser.add_argument("--ffmpeg-bin", default="ffmpeg")
@@ -602,6 +687,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             execute=bool(args.execute),
             prefer_hardlink=not bool(args.copy_instead_of_hardlink),
             max_pairs=args.max_pairs,
+            num_workers=int(args.num_workers),
             ffmpeg_bin=str(args.ffmpeg_bin),
             ffprobe_bin=str(args.ffprobe_bin),
         )
