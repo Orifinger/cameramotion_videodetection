@@ -1,0 +1,166 @@
+{
+  "schema_version": "dataA_v1_compatibility_matrix_v2",
+  "notes": [
+    "Reference pairing constraints for dataset-v2 planning.",
+    "Unknown or cross-group pairs are blocked unless an explicit rule allows them."
+  ],
+  "limits": {
+    "target_video_max_use": 1,
+    "donor_track_max_use": 1,
+    "donor_video_max_use": 2,
+    "completed_case_counts_as_used": true
+  },
+  "groups": {
+    "person.real": {
+      "label_prefixes": ["person.real."],
+      "allowed_with": ["person.real"],
+      "preferred_operation": "person_appearance_swap",
+      "mask_policy": "person"
+    },
+    "person.synthetic_character": {
+      "label_prefixes": ["person.cartoon", "person.3d_character"],
+      "allowed_with": ["person.synthetic_character"],
+      "preferred_operation": "person_appearance_swap",
+      "mask_policy": "person"
+    },
+    "animal": {
+      "label_prefixes": ["animal."],
+      "allowed_with": ["animal"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "vehicle.road.car_like": {
+      "label_prefixes": ["vehicle.road.car", "vehicle.road.bus_truck_van"],
+      "allowed_with": ["vehicle.road.car_like"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "vehicle.road.two_wheel": {
+      "label_prefixes": ["vehicle.road.motorcycle_bicycle"],
+      "allowed_with": ["vehicle.road.two_wheel"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "vehicle.air": {
+      "label_prefixes": ["vehicle.air."],
+      "allowed_with": ["vehicle.air"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "vehicle.water": {
+      "label_prefixes": ["vehicle.water."],
+      "allowed_with": ["vehicle.water"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "surface": {
+      "label_prefixes": ["surface."],
+      "allowed_with": [],
+      "preferred_operation": "surface_attribute_edit",
+      "mask_policy": "surface_bbox",
+      "reference_required": false
+    },
+    "object.lighting.street": {
+      "label_prefixes": ["object.lighting.street_light"],
+      "allowed_with": ["object.lighting.street"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "bbox_for_thin_object"
+    },
+    "object.lighting.indoor": {
+      "label_prefixes": ["object.lighting.indoor_lamp"],
+      "allowed_with": ["object.lighting.indoor"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "bbox_for_thin_object"
+    },
+    "object.furniture.chair": {
+      "label_prefixes": ["object.furniture.chair"],
+      "allowed_with": ["object.furniture.chair"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "object.furniture.table": {
+      "label_prefixes": ["object.furniture.table"],
+      "allowed_with": ["object.furniture.table"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "object.bag_suitcase": {
+      "label_prefixes": ["object.bag_suitcase"],
+      "allowed_with": ["object.bag_suitcase"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "object.handheld": {
+      "label_prefixes": ["object.handheld"],
+      "allowed_with": ["object.handheld"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "bbox_for_small_or_irregular"
+    },
+    "object.generic": {
+      "label_prefixes": ["object.generic", "object.food", "object.plant", "object.sports_ball", "person.statue_or_mannequin"],
+      "allowed_with": ["object.generic"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "bbox_for_small_or_irregular"
+    }
+  },
+  "hard_blocks": [
+    {
+      "target_prefix": "vehicle.air.",
+      "donor_prefix": "vehicle.road.",
+      "reason": "aircraft_not_road_vehicle"
+    },
+    {
+      "target_prefix": "vehicle.road.",
+      "donor_prefix": "vehicle.air.",
+      "reason": "road_vehicle_not_aircraft"
+    },
+    {
+      "target_prefix": "object.lighting.street_light",
+      "donor_prefix": "object.lighting.indoor_lamp",
+      "reason": "street_light_not_indoor_lamp"
+    },
+    {
+      "target_prefix": "object.lighting.indoor_lamp",
+      "donor_prefix": "object.lighting.street_light",
+      "reason": "indoor_lamp_not_street_light"
+    },
+    {
+      "target_prefix": "unknown",
+      "donor_prefix": "",
+      "reason": "unknown_taxonomy_not_reference_pairable"
+    }
+  ],
+  "mask_policies": {
+    "person": {
+      "variant_type": "erode_then_dilate",
+      "erosion_radius_px": 1,
+      "dilation_radius_px": 6,
+      "bbox_expand_ratio": 1.0,
+      "person_bbox_disabled": true
+    },
+    "similar_object": {
+      "variant_type": "sam3_shape",
+      "dilation_radius_px": 4,
+      "bbox_expand_ratio": 1.10,
+      "person_bbox_disabled": false
+    },
+    "bbox_for_small_or_irregular": {
+      "variant_type": "expanded_bbox",
+      "dilation_radius_px": 8,
+      "bbox_expand_ratio": 1.20,
+      "person_bbox_disabled": false
+    },
+    "bbox_for_thin_object": {
+      "variant_type": "expanded_bbox",
+      "dilation_radius_px": 10,
+      "bbox_expand_ratio": 1.25,
+      "person_bbox_disabled": false
+    },
+    "surface_bbox": {
+      "variant_type": "expanded_bbox",
+      "dilation_radius_px": 4,
+      "bbox_expand_ratio": 1.08,
+      "person_bbox_disabled": false
+    }
+  }
+}

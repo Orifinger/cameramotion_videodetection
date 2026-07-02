@@ -52,9 +52,13 @@ from configs.object_proposal_config import (
 )
 
 SCHEMA_VERSION = "qwen_region_candidates_v4"
+REGION_SCHEMA_VERSION = "qwen_region_candidates_v4"
+INVENTORY_RAW_SCHEMA_VERSION = "qwen_video_inventory_v2_raw"
+INVENTORY_NORMALIZED_SCHEMA_VERSION = "qwen_video_inventory_v2_normalized"
 DEFAULT_MAX_SAM3_CANDIDATES = MAX_SAM3_CANDIDATES
 DEFAULT_MAX_DEFERRED_CANDIDATES = MAX_DEFERRED_CANDIDATES
 PROMPT_PROFILE = "default"
+MAX_INVENTORY_ENTITIES = 32
 
 ALLOWED_SAM3_FAMILIES = {"physical_instance", "editable_surface"}
 ALLOWED_TARGET_SCOPES = {"whole_instance", "whole_surface"}
@@ -101,6 +105,23 @@ ALLOWED_NO_CANDIDATE_REASONS = {
     "only_deferred_regions",
     "target_too_small_or_occluded",
     "unknown",
+}
+ALLOWED_INVENTORY_COARSE_TYPES = {
+    "person", "animal", "vehicle", "object", "surface", "text_region",
+    "food", "plant", "other", "unknown",
+}
+ALLOWED_INVENTORY_VISUAL_DOMAINS = {
+    "real", "cartoon", "3d_render", "toy", "statue", "mannequin", "unclear",
+}
+ALLOWED_INVENTORY_PERSON_VIEWS = {"front", "back", "side", "three_quarter", "unclear", "not_person"}
+ALLOWED_INVENTORY_SALIENCE = {"primary", "secondary", "background", "unclear"}
+ALLOWED_INVENTORY_FOREGROUND = {"foreground", "midground", "background", "unclear"}
+ALLOWED_INVENTORY_SIZE = {"large", "medium", "small", "tiny", "unclear"}
+ALLOWED_INVENTORY_VISIBILITY = {"complete", "partial", "occluded", "truncated", "unclear"}
+ALLOWED_INVENTORY_SUITABILITY = {"good", "maybe", "bad", "unclear"}
+ALLOWED_INVENTORY_OPERATIONS = {
+    "person_appearance_swap", "object_swap", "surface_attribute_edit",
+    "surface_content_edit", "object_attribute_edit", "reserve", "blocked",
 }
 
 BANNED_CANONICAL_EXACT = {
@@ -228,8 +249,103 @@ regions, and ambiguous generic prompts. Use short disambiguated SAM prompts for
 multiple similar instances.
 """
 
+INVENTORY_V2_PROMPT = f"""
+You are building a video object inventory for a downstream SAM3 + VACE local
+editing dataset.
+
+This is NOT final pairing and NOT final editing. Your job is to list visible
+entities in the complete video with high recall, especially foreground people
+and main objects. Do not invent entities. A video may have zero usable entities.
+
+Return a JSON object with:
+- `schema_version`: "{INVENTORY_RAW_SCHEMA_VERSION}";
+- `scene_summary`: one short sentence;
+- `entities`: at most {MAX_INVENTORY_ENTITIES} entity objects;
+- `no_editable_entity_reason`: null or a short reason.
+
+For every visible entity that could plausibly be segmented or used as a donor
+reference, provide:
+- `entity_id`: a stable local id such as "entity_001";
+- `coarse_type`: one of person, animal, vehicle, object, surface, text_region,
+  food, plant, other, unknown;
+- `fine_type_raw`: a short natural class name such as "adult man", "white car",
+  "street light", "poster", "display screen";
+- `visual_domain`: real, cartoon, 3d_render, toy, statue, mannequin, or unclear;
+- `person_view`: front, back, side, three_quarter, unclear, or not_person;
+- `salience`: primary, secondary, background, or unclear;
+- `foreground_status`: foreground, midground, background, or unclear;
+- `size_level`: large, medium, small, tiny, or unclear;
+- `visibility`: complete, partial, occluded, truncated, or unclear;
+- `edit_suitability`: good, maybe, bad, or unclear;
+- `donor_suitability`: good, maybe, bad, or unclear;
+- `sam3_prompt_phrase`: a short noun phrase for SAM3, never a long sentence;
+- `suggested_operation`: person_appearance_swap, object_swap,
+  surface_attribute_edit, surface_content_edit, object_attribute_edit, reserve,
+  or blocked;
+- `notes`: short evidence, without speculation;
+- `uncertain_reason`: short reason when classification or suitability is unclear.
+
+Important policy:
+- Prefer listing a non-tiny visible person over tiny or odd objects.
+- Distinguish real people from cartoon characters, 3D characters, statues,
+  mannequins, toys, and people printed on screens/posters.
+- Distinguish road vehicles, aircraft, and boats. Do not merge them into a
+  generic vehicle when the subtype is visible.
+- Distinguish outdoor street lights from indoor lamps.
+- For screen/poster/sign/book/map, list the whole carrier surface, not only the
+  internal text.
+- Mark thin, tiny, heavily occluded, or ambiguous objects as `maybe` or `bad`.
+
+Return JSON only. Do not include Markdown or explanations outside JSON.
+"""
+
+NORMALIZED_INVENTORY_V2_PROMPT = f"""
+You are normalizing a video object inventory into a fixed taxonomy for a SAM3 +
+VACE local editing dataset.
+
+Use the following target taxonomy labels when possible:
+- person.real.front, person.real.side, person.real.back, person.real.unclear
+- person.cartoon, person.3d_character, person.statue_or_mannequin
+- animal.generic
+- vehicle.road.car, vehicle.road.bus_truck_van, vehicle.road.motorcycle_bicycle
+- vehicle.air.aircraft, vehicle.water.boat
+- surface.screen, surface.poster_sign, surface.book_paper_map, surface.framed_art
+- object.lighting.street_light, object.lighting.indoor_lamp
+- object.furniture.chair, object.furniture.table
+- object.bag_suitcase, object.handheld, object.food, object.plant,
+  object.sports_ball, object.generic
+- unknown
+
+Return a JSON object with:
+- `schema_version`: "{INVENTORY_NORMALIZED_SCHEMA_VERSION}";
+- `scene_summary`: one short sentence;
+- `entities`: at most {MAX_INVENTORY_ENTITIES} entity objects;
+- `no_editable_entity_reason`: null or a short reason.
+
+Each entity must include the same fields as inventory_v2 plus:
+- `taxonomy_label`: one of the labels above;
+- `compatibility_group_hint`: a short group hint, such as person.real,
+  vehicle.road.car_like, vehicle.air, surface, object.bag_suitcase, or unknown.
+
+Rules:
+- If a visible non-tiny real person exists, label it as a person and mark it as
+  high priority for person_appearance_swap.
+- Real people must not be normalized as cartoon/3D/statue/mannequin.
+- Aircraft must not be normalized as road vehicles; road vehicles must not be
+  normalized as aircraft.
+- Street lights must not be normalized as indoor lamps.
+- If no taxonomy label fits, use unknown and explain in `uncertain_reason`.
+- `sam3_prompt_phrase` must be a short noun phrase suitable for SAM3.
+
+Return JSON only. Do not include Markdown or explanations outside JSON.
+"""
+
 
 def build_object_proposal_prompt(profile: str) -> str:
+    if profile == "inventory_v2":
+        return INVENTORY_V2_PROMPT
+    if profile == "normalized_inventory_v2":
+        return NORMALIZED_INVENTORY_V2_PROMPT
     prompt = BASE_OBJECT_PROPOSAL_PROMPT.replace(
         f"Return at most {DEFAULT_MAX_SAM3_CANDIDATES} `sam3_candidates` and at most\n"
         f"{DEFAULT_MAX_DEFERRED_CANDIDATES} `deferred_candidates`.",
@@ -250,7 +366,48 @@ def schema_object(properties: dict[str, Any], required: list[str]) -> dict[str, 
     }
 
 
+def build_inventory_json_schema() -> dict[str, Any]:
+    normalized = PROMPT_PROFILE == "normalized_inventory_v2"
+    entity_properties: dict[str, Any] = {
+        "entity_id": {"type": "string"},
+        "coarse_type": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_COARSE_TYPES)},
+        "fine_type_raw": {"type": "string"},
+        "visual_domain": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_VISUAL_DOMAINS)},
+        "person_view": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_PERSON_VIEWS)},
+        "salience": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_SALIENCE)},
+        "foreground_status": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_FOREGROUND)},
+        "size_level": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_SIZE)},
+        "visibility": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_VISIBILITY)},
+        "edit_suitability": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_SUITABILITY)},
+        "donor_suitability": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_SUITABILITY)},
+        "sam3_prompt_phrase": {"type": "string"},
+        "suggested_operation": {"type": "string", "enum": sorted(ALLOWED_INVENTORY_OPERATIONS)},
+        "notes": {"type": "string"},
+        "uncertain_reason": {"type": "string"},
+    }
+    required = list(entity_properties)
+    if normalized:
+        entity_properties["taxonomy_label"] = {"type": "string"}
+        entity_properties["compatibility_group_hint"] = {"type": "string"}
+        required.extend(["taxonomy_label", "compatibility_group_hint"])
+    return schema_object(
+        {
+            "schema_version": {"type": "string", "enum": [SCHEMA_VERSION]},
+            "scene_summary": {"type": "string"},
+            "entities": {
+                "type": "array",
+                "maxItems": MAX_INVENTORY_ENTITIES,
+                "items": schema_object(entity_properties, required),
+            },
+            "no_editable_entity_reason": {"type": ["string", "null"]},
+        },
+        ["schema_version", "scene_summary", "entities", "no_editable_entity_reason"],
+    )
+
+
 def build_json_schema() -> dict[str, Any]:
+    if PROMPT_PROFILE in {"inventory_v2", "normalized_inventory_v2"}:
+        return build_inventory_json_schema()
     return schema_object(
         {
             "schema_version": {"type": "string", "enum": [SCHEMA_VERSION]},
@@ -558,6 +715,80 @@ def normalize_proposal(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_inventory_proposal(raw: dict[str, Any]) -> dict[str, Any]:
+    raw_entities = raw.get("entities")
+    if not isinstance(raw_entities, list):
+        raise ProposalError("Expected list field 'entities'.")
+    normalized_profile = PROMPT_PROFILE == "normalized_inventory_v2"
+    entities: list[dict[str, Any]] = []
+    rejections: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_prompts: set[tuple[str, str]] = set()
+    for raw_item in raw_entities:
+        if not isinstance(raw_item, dict):
+            rejections.append({"reason": "unsupported_entity_type", "detail": type(raw_item).__name__})
+            continue
+        raw_id = clean_text(raw_item.get("entity_id"), 64)
+        entity_id = raw_id or f"entity_{len(entities) + 1:03d}"
+        if entity_id in seen_ids:
+            entity_id = f"entity_{len(entities) + 1:03d}"
+        coarse_type = enum_or_default(raw_item.get("coarse_type"), ALLOWED_INVENTORY_COARSE_TYPES, "unknown")
+        fine_type_raw = clean_text(raw_item.get("fine_type_raw"), 120).lower()
+        prompt = clean_text(raw_item.get("sam3_prompt_phrase"), 120)
+        if not fine_type_raw and not prompt:
+            rejections.append({"entity_id": entity_id, "reason": "missing_fine_type_and_sam3_prompt"})
+            continue
+        prompt_key = (coarse_type, prompt.lower())
+        if prompt and prompt_key in seen_prompts:
+            rejections.append({"entity_id": entity_id, "reason": "duplicate_sam3_prompt_phrase", "sam3_prompt_phrase": prompt})
+            continue
+        seen_ids.add(entity_id)
+        if prompt:
+            seen_prompts.add(prompt_key)
+        entity = {
+            "entity_id": entity_id,
+            "coarse_type": coarse_type,
+            "fine_type_raw": fine_type_raw,
+            "visual_domain": enum_or_default(raw_item.get("visual_domain"), ALLOWED_INVENTORY_VISUAL_DOMAINS, "unclear"),
+            "person_view": enum_or_default(raw_item.get("person_view"), ALLOWED_INVENTORY_PERSON_VIEWS, "unclear"),
+            "salience": enum_or_default(raw_item.get("salience"), ALLOWED_INVENTORY_SALIENCE, "unclear"),
+            "foreground_status": enum_or_default(raw_item.get("foreground_status"), ALLOWED_INVENTORY_FOREGROUND, "unclear"),
+            "size_level": enum_or_default(raw_item.get("size_level"), ALLOWED_INVENTORY_SIZE, "unclear"),
+            "visibility": enum_or_default(raw_item.get("visibility"), ALLOWED_INVENTORY_VISIBILITY, "unclear"),
+            "edit_suitability": enum_or_default(raw_item.get("edit_suitability"), ALLOWED_INVENTORY_SUITABILITY, "unclear"),
+            "donor_suitability": enum_or_default(raw_item.get("donor_suitability"), ALLOWED_INVENTORY_SUITABILITY, "unclear"),
+            "sam3_prompt_phrase": prompt or fine_type_raw,
+            "suggested_operation": enum_or_default(raw_item.get("suggested_operation"), ALLOWED_INVENTORY_OPERATIONS, "reserve"),
+            "notes": clean_text(raw_item.get("notes"), 300),
+            "uncertain_reason": clean_text(raw_item.get("uncertain_reason"), 220),
+        }
+        if normalized_profile:
+            entity["taxonomy_label"] = clean_text(raw_item.get("taxonomy_label"), 120).lower() or "unknown"
+            entity["compatibility_group_hint"] = clean_text(raw_item.get("compatibility_group_hint"), 120).lower() or "unknown"
+        entities.append(entity)
+        if len(entities) >= MAX_INVENTORY_ENTITIES:
+            break
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "scene_summary": clean_text(raw.get("scene_summary"), 400),
+        "entities": entities,
+        "no_editable_entity_reason": clean_text(raw.get("no_editable_entity_reason"), 200) or None,
+        "parser_rejections": rejections,
+    }
+
+
+def normalize_model_response(raw: dict[str, Any]) -> dict[str, Any]:
+    if PROMPT_PROFILE in {"inventory_v2", "normalized_inventory_v2"}:
+        return normalize_inventory_proposal(raw)
+    return normalize_proposal(raw)
+
+
+def proposal_has_primary_output(proposal: dict[str, Any]) -> bool:
+    if "entities" in proposal:
+        return bool(proposal.get("entities"))
+    return bool(proposal.get("sam3_candidates"))
+
+
 def load_manifest() -> list[dict[str, Any]]:
     path = Path(MANIFEST_PATH)
     if not path.is_file():
@@ -623,12 +854,11 @@ def is_current_terminal_record(record: dict[str, Any] | None) -> bool:
     if record.get("status") not in {"success", "no_sam3_candidate"}:
         return False
     proposal = record.get("proposal")
-    return (
-        isinstance(proposal, dict)
-        and isinstance(proposal.get("sam3_candidates"), list)
-        and isinstance(proposal.get("deferred_candidates"), list)
-        and isinstance(proposal.get("parser_rejections"), list)
-    )
+    if not isinstance(proposal, dict) or not isinstance(proposal.get("parser_rejections"), list):
+        return False
+    if PROMPT_PROFILE in {"inventory_v2", "normalized_inventory_v2"}:
+        return isinstance(proposal.get("entities"), list)
+    return isinstance(proposal.get("sam3_candidates"), list) and isinstance(proposal.get("deferred_candidates"), list)
 
 
 def make_payload(video_path: str) -> dict[str, Any]:
@@ -682,9 +912,9 @@ async def infer_one(session: aiohttp.ClientSession, semaphore: asyncio.Semaphore
                         raise ProposalError(f"HTTP {response.status}: {response_text[:1500]}")
                     response_json = json.loads(response_text)
                     parsed = extract_balanced_json(response_content(response_json))
-                    proposal = normalize_proposal(parsed)
+                    proposal = normalize_model_response(parsed)
 
-                status = "success" if proposal["sam3_candidates"] else "no_sam3_candidate"
+                status = "success" if proposal_has_primary_output(proposal) else "no_sam3_candidate"
                 return {
                     "video_id": video["video_id"],
                     "relative_path": video["relative_path"],
@@ -772,6 +1002,42 @@ def write_all_outputs(store: UnifiedStore) -> dict[str, Any]:
     all_records = all_dataset["videos"]
     atomic_write_json(Path(ALL_CANDIDATES_PATH), all_dataset)
 
+    if PROMPT_PROFILE in {"inventory_v2", "normalized_inventory_v2"}:
+        inventory_videos: list[dict[str, Any]] = []
+        flat_entities: list[dict[str, Any]] = []
+        for record in all_records:
+            proposal = record.get("proposal")
+            entities = proposal.get("entities") if isinstance(proposal, dict) else None
+            if not isinstance(entities, list):
+                continue
+            packed_entities = []
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    continue
+                item = dict(entity)
+                item["video_id"] = record["video_id"]
+                item["video_path"] = record.get("video_path")
+                item["relative_path"] = record.get("relative_path")
+                flat_entities.append(item)
+                packed_entities.append(entity)
+            inventory_videos.append({
+                "video_id": record["video_id"],
+                "relative_path": record.get("relative_path"),
+                "video_path": record.get("video_path"),
+                "status": record["status"],
+                "scene_summary": proposal.get("scene_summary") if isinstance(proposal, dict) else None,
+                "entities": packed_entities,
+            })
+        atomic_write_json(Path(ALL_CANDIDATES_PATH).with_name("qwen_inventory_entities.json"), {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at_utc": utc_now(),
+            "source_file": str(ALL_CANDIDATES_PATH),
+            "num_videos": len(inventory_videos),
+            "num_entities": len(flat_entities),
+            "videos": inventory_videos,
+            "entities": flat_entities,
+        })
+
     sam3_videos: list[dict[str, Any]] = []
     for record in all_records:
         proposal = record.get("proposal")
@@ -803,6 +1069,12 @@ def build_summary(started_at: str, started_perf: float, manifest_total: int, que
     elapsed = time.perf_counter() - started_perf
     records = dataset.get("videos", [])
     proposals = [record.get("proposal") for record in records if isinstance(record, dict) and isinstance(record.get("proposal"), dict)]
+    entities = [
+        entity
+        for proposal in proposals
+        for entity in (proposal.get("entities") or [])
+        if isinstance(entity, dict)
+    ]
     return {
         "schema_version": "qwen_region_candidate_run_summary_v4",
         "started_at_utc": started_at,
@@ -834,6 +1106,8 @@ def build_summary(started_at: str, started_perf: float, manifest_total: int, que
         "candidate_totals": {
             "sam3_candidates": sum(len(proposal.get("sam3_candidates", [])) for proposal in proposals),
             "deferred_candidates": sum(len(proposal.get("deferred_candidates", [])) for proposal in proposals),
+            "inventory_entities": len(entities),
+            "inventory_unknown_taxonomy": sum(str(entity.get("taxonomy_label") or "") == "unknown" for entity in entities),
             "parser_rejections": sum(len(proposal.get("parser_rejections", [])) for proposal in proposals),
         },
         "elapsed_seconds": round(elapsed, 3),
@@ -888,7 +1162,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--all-videos", action="store_true", help="Process all videos from the manifest.")
     parser.add_argument("--max-sam3-candidates", type=int, default=None)
     parser.add_argument("--max-deferred-candidates", type=int, default=None)
-    parser.add_argument("--prompt-profile", choices=("default", "subject_first_rerun"), default="default")
+    parser.add_argument(
+        "--prompt-profile",
+        choices=("default", "subject_first_rerun", "inventory_v2", "normalized_inventory_v2"),
+        default="default",
+    )
     parser.add_argument("--overwrite-existing", action="store_true")
     parser.add_argument("--no-retry-failures", action="store_true")
     return parser.parse_args()
@@ -901,13 +1179,28 @@ def configure_runtime(args: argparse.Namespace) -> None:
     global ALL_CANDIDATES_PATH, SAM3_CANDIDATES_PATH, SCENE_TEXT_GRAPHIC_PATH
     global SCREEN_OVERLAY_PATH, PERSISTENT_WATERMARK_PATH, PARSER_REJECTIONS_PATH
     global RUN_SUMMARY_PATH, OBJECT_PROPOSAL_PROMPT, JSON_SCHEMA
+    global SCHEMA_VERSION
 
+    PROMPT_PROFILE = str(args.prompt_profile)
+    if PROMPT_PROFILE == "inventory_v2":
+        SCHEMA_VERSION = INVENTORY_RAW_SCHEMA_VERSION
+    elif PROMPT_PROFILE == "normalized_inventory_v2":
+        SCHEMA_VERSION = INVENTORY_NORMALIZED_SCHEMA_VERSION
+    else:
+        SCHEMA_VERSION = REGION_SCHEMA_VERSION
     if args.manifest is not None:
         MANIFEST_PATH = Path(args.manifest)
-    if args.out_root is not None:
-        out_root = Path(args.out_root)
-        ALL_CANDIDATES_PATH = out_root / "qwen_region_candidates_all.json"
-        SAM3_CANDIDATES_PATH = out_root / "qwen_sam3_candidates.json"
+    if args.out_root is not None or PROMPT_PROFILE in {"inventory_v2", "normalized_inventory_v2"}:
+        out_root = Path(args.out_root) if args.out_root is not None else PROJECT_ROOT / "res" / "qwen_inventory_v2"
+        if PROMPT_PROFILE == "inventory_v2":
+            ALL_CANDIDATES_PATH = out_root / "qwen_inventory_v2_raw.json"
+            SAM3_CANDIDATES_PATH = out_root / "qwen_sam3_candidates_inventory_v2_raw.json"
+        elif PROMPT_PROFILE == "normalized_inventory_v2":
+            ALL_CANDIDATES_PATH = out_root / "qwen_inventory_v2_normalized.json"
+            SAM3_CANDIDATES_PATH = out_root / "qwen_sam3_candidates_inventory_v2.json"
+        else:
+            ALL_CANDIDATES_PATH = out_root / "qwen_region_candidates_all.json"
+            SAM3_CANDIDATES_PATH = out_root / "qwen_sam3_candidates.json"
         SCENE_TEXT_GRAPHIC_PATH = out_root / "qwen_deferred_scene_text_graphic.json"
         SCREEN_OVERLAY_PATH = out_root / "qwen_deferred_screen_overlay.json"
         PERSISTENT_WATERMARK_PATH = out_root / "qwen_deferred_persistent_watermark.json"
@@ -943,7 +1236,6 @@ def configure_runtime(args: argparse.Namespace) -> None:
         OVERWRITE_EXISTING = True
     if args.no_retry_failures:
         RETRY_FAILURE_RECORDS = False
-    PROMPT_PROFILE = str(args.prompt_profile)
     OBJECT_PROPOSAL_PROMPT = build_object_proposal_prompt(PROMPT_PROFILE)
     JSON_SCHEMA = build_json_schema()
 

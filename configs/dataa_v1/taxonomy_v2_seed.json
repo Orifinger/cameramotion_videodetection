@@ -1,0 +1,184 @@
+{
+  "schema_version": "dataA_v1_taxonomy_v2_seed",
+  "notes": [
+    "Seed taxonomy for Qwen inventory normalization and SAM3 prompt generation.",
+    "Labels are intentionally coarse enough for stable pairing; unknown labels are allowed but should be audited."
+  ],
+  "taxonomy_labels": {
+    "person.real.front": {
+      "coarse_type": "person",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["adult person", "person"],
+      "allowed_operations": ["person_appearance_swap"]
+    },
+    "person.real.side": {
+      "coarse_type": "person",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["adult person", "person"],
+      "allowed_operations": ["person_appearance_swap"]
+    },
+    "person.real.back": {
+      "coarse_type": "person",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["adult person", "person"],
+      "allowed_operations": ["person_appearance_swap"]
+    },
+    "person.real.unclear": {
+      "coarse_type": "person",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["person"],
+      "allowed_operations": ["person_appearance_swap"]
+    },
+    "person.cartoon": {
+      "coarse_type": "person",
+      "visual_domain": "cartoon",
+      "sam3_prompt_templates": ["cartoon character", "animated character"],
+      "allowed_operations": ["person_appearance_swap"]
+    },
+    "person.3d_character": {
+      "coarse_type": "person",
+      "visual_domain": "3d_render",
+      "sam3_prompt_templates": ["3d character", "animated character"],
+      "allowed_operations": ["person_appearance_swap"]
+    },
+    "person.statue_or_mannequin": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["statue", "mannequin"],
+      "allowed_operations": ["object_swap"]
+    },
+    "animal.generic": {
+      "coarse_type": "animal",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["animal"],
+      "allowed_operations": ["object_swap"]
+    },
+    "vehicle.road.car": {
+      "coarse_type": "vehicle",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["car", "vehicle"],
+      "allowed_operations": ["object_swap"]
+    },
+    "vehicle.road.bus_truck_van": {
+      "coarse_type": "vehicle",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["bus", "truck", "van"],
+      "allowed_operations": ["object_swap"]
+    },
+    "vehicle.road.motorcycle_bicycle": {
+      "coarse_type": "vehicle",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["motorcycle", "bicycle"],
+      "allowed_operations": ["object_swap"]
+    },
+    "vehicle.air.aircraft": {
+      "coarse_type": "vehicle",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["airplane", "aircraft", "helicopter"],
+      "allowed_operations": ["object_swap"]
+    },
+    "vehicle.water.boat": {
+      "coarse_type": "vehicle",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["boat", "ship"],
+      "allowed_operations": ["object_swap"]
+    },
+    "surface.screen": {
+      "coarse_type": "surface",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["display screen", "screen"],
+      "allowed_operations": ["surface_attribute_edit"]
+    },
+    "surface.poster_sign": {
+      "coarse_type": "surface",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["poster", "sign", "billboard"],
+      "allowed_operations": ["surface_attribute_edit"]
+    },
+    "surface.book_paper_map": {
+      "coarse_type": "surface",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["book", "paper", "map"],
+      "allowed_operations": ["surface_attribute_edit"]
+    },
+    "surface.framed_art": {
+      "coarse_type": "surface",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["framed art", "painting"],
+      "allowed_operations": ["surface_attribute_edit"]
+    },
+    "object.lighting.street_light": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["street light", "lamp post"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.lighting.indoor_lamp": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["lamp", "desk lamp"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.furniture.chair": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["chair"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.furniture.table": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["table", "desk"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.bag_suitcase": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["bag", "suitcase", "backpack"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.handheld": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["handheld object"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.food": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["food item"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.plant": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["plant"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.sports_ball": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["ball"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.generic": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_prompt_templates": ["object"],
+      "allowed_operations": ["object_swap"]
+    },
+    "unknown": {
+      "coarse_type": "unknown",
+      "visual_domain": "unclear",
+      "sam3_prompt_templates": [],
+      "allowed_operations": []
+    }
+  },
+  "qwen_normalization_rules": {
+    "prefer_real_person_when_visible_and_not_tiny": true,
+    "mark_uncertain_if_no_taxonomy_label_fits": true,
+    "do_not_map_aircraft_to_road_vehicle": true,
+    "do_not_map_street_light_to_indoor_lamp": true,
+    "surface_text_regions_are_carrier_surfaces_not_internal_text": true
+  }
+}
