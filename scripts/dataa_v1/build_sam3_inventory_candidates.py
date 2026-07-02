@@ -17,6 +17,7 @@ from scripts.dataa_v1.common import DataAError, read_json, utc_now_iso, write_js
 
 DEFAULT_INVENTORY = Path("res/qwen_inventory_v2/qwen_inventory_v2_normalized.json")
 DEFAULT_OUT = Path("res/qwen_inventory_v2/qwen_sam3_candidates_inventory_v2.json")
+DEFAULT_TAXONOMY = Path("configs/dataa_v1/taxonomy_v2_seed.json")
 SAM3_SCHEMA_VERSION = "qwen_region_candidates_v4"
 
 SURFACE_LABEL_PREFIXES = ("surface.",)
@@ -68,6 +69,20 @@ def _iter_inventory_videos(payload: Any) -> list[dict[str, Any]]:
     raise DataAError("inventory JSON must contain videos[] or flat entities[]")
 
 
+def _non_sam3_labels(taxonomy: Path | None) -> set[str]:
+    if taxonomy is None:
+        return set()
+    payload = read_json(taxonomy)
+    labels = payload.get("taxonomy_labels") if isinstance(payload, Mapping) else None
+    if not isinstance(labels, Mapping):
+        return set()
+    blocked: set[str] = set()
+    for label, meta in labels.items():
+        if isinstance(meta, Mapping) and meta.get("sam3_candidate") is False:
+            blocked.add(str(label).lower())
+    return blocked
+
+
 def _region_class_for_entity(entity: Mapping[str, Any]) -> tuple[str, str, str]:
     label = _clean(entity.get("taxonomy_label"), max_len=120).lower()
     coarse = _clean(entity.get("coarse_type"), max_len=80).lower()
@@ -94,13 +109,17 @@ def _region_class_for_entity(entity: Mapping[str, Any]) -> tuple[str, str, str]:
     return "physical_instance", "bounded_object", "whole_instance"
 
 
-def _keep_entity(entity: Mapping[str, Any], *, include_bad: bool) -> tuple[bool, str]:
+def _keep_entity(entity: Mapping[str, Any], *, include_bad: bool, non_sam3_labels: set[str]) -> tuple[bool, str]:
     prompt = _clean(entity.get("sam3_prompt_phrase"), max_len=120)
     if not prompt:
         return False, "missing_sam3_prompt_phrase"
     label = _clean(entity.get("taxonomy_label"), max_len=120).lower()
+    if not label:
+        return False, "missing_taxonomy_label"
     if label == "unknown":
         return False, "unknown_taxonomy"
+    if label.startswith("blocked.") or label in non_sam3_labels:
+        return False, "taxonomy_not_sam3_candidate"
     if not include_bad:
         if _clean(entity.get("edit_suitability")).lower() == "bad" and _clean(entity.get("donor_suitability")).lower() == "bad":
             return False, "edit_and_donor_bad"
@@ -146,11 +165,13 @@ def build_candidates(
     *,
     inventory: Path,
     out_path: Path,
+    taxonomy: Path | None = None,
     include_bad: bool = False,
     max_candidates_per_video: int | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     payload = read_json(inventory)
+    blocked_labels = _non_sam3_labels(taxonomy)
     videos = _iter_inventory_videos(payload)
     out_videos: list[dict[str, Any]] = []
     rejection_counts: Counter[str] = Counter()
@@ -164,7 +185,7 @@ def build_candidates(
         for entity in entities:
             if not isinstance(entity, Mapping):
                 continue
-            keep, reason = _keep_entity(entity, include_bad=include_bad)
+            keep, reason = _keep_entity(entity, include_bad=include_bad, non_sam3_labels=blocked_labels)
             if not keep:
                 rejection_counts[reason] += 1
                 rejections.append({"entity_id": entity.get("entity_id"), "reason": reason})
@@ -189,6 +210,7 @@ def build_candidates(
         "schema_version": SAM3_SCHEMA_VERSION,
         "generated_at_utc": utc_now_iso(),
         "source_inventory": str(inventory),
+        "source_taxonomy": str(taxonomy) if taxonomy is not None else None,
         "num_videos": len(out_videos),
         "num_candidates": sum(len(video["sam3_candidates"]) for video in out_videos),
         "rejection_counts": dict(rejection_counts),
@@ -204,6 +226,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--taxonomy", type=Path, default=DEFAULT_TAXONOMY)
     parser.add_argument("--include-bad", action="store_true")
     parser.add_argument("--max-candidates-per-video", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -216,6 +239,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = build_candidates(
             inventory=_resolve_project_path(args.inventory) or args.inventory,
             out_path=_resolve_project_path(args.out) or args.out,
+            taxonomy=_resolve_project_path(args.taxonomy) or args.taxonomy,
             include_bad=bool(args.include_bad),
             max_candidates_per_video=args.max_candidates_per_video,
             dry_run=bool(args.dry_run),

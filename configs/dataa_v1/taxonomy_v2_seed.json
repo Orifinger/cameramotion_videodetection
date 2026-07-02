@@ -1,175 +1,399 @@
 {
   "schema_version": "dataA_v1_taxonomy_v2_seed",
   "notes": [
-    "Seed taxonomy for Qwen inventory normalization and SAM3 prompt generation.",
-    "Labels are intentionally coarse enough for stable pairing; unknown labels are allowed but should be audited."
+    "Seed taxonomy for Qwen inventory normalization, SAM3 prompt generation, and Data A v1 pairing.",
+    "Labels are intentionally coarse enough for stable pairing; blocked labels absorb scene/background/text/material regions that must not enter SAM3/VACE pairing."
   ],
   "taxonomy_labels": {
     "person.real.front": {
       "coarse_type": "person",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "person.real",
       "sam3_prompt_templates": ["adult person", "person"],
       "allowed_operations": ["person_appearance_swap"]
     },
     "person.real.side": {
       "coarse_type": "person",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "person.real",
       "sam3_prompt_templates": ["adult person", "person"],
       "allowed_operations": ["person_appearance_swap"]
     },
     "person.real.back": {
       "coarse_type": "person",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "person.real",
       "sam3_prompt_templates": ["adult person", "person"],
       "allowed_operations": ["person_appearance_swap"]
     },
     "person.real.unclear": {
       "coarse_type": "person",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "person.real",
       "sam3_prompt_templates": ["person"],
       "allowed_operations": ["person_appearance_swap"]
     },
     "person.cartoon": {
       "coarse_type": "person",
       "visual_domain": "cartoon",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "person.synthetic_character",
       "sam3_prompt_templates": ["cartoon character", "animated character"],
       "allowed_operations": ["person_appearance_swap"]
     },
     "person.3d_character": {
       "coarse_type": "person",
       "visual_domain": "3d_render",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "person.synthetic_character",
       "sam3_prompt_templates": ["3d character", "animated character"],
       "allowed_operations": ["person_appearance_swap"]
     },
     "person.statue_or_mannequin": {
       "coarse_type": "object",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.generic",
       "sam3_prompt_templates": ["statue", "mannequin"],
+      "allowed_operations": ["object_swap"]
+    },
+    "animal.pet.dog_cat": {
+      "coarse_type": "animal",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "animal.pet",
+      "sam3_prompt_templates": ["dog", "cat", "pet animal"],
+      "allowed_operations": ["object_swap"]
+    },
+    "animal.large_mammal": {
+      "coarse_type": "animal",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "animal.large_mammal",
+      "sam3_prompt_templates": ["horse", "elephant", "large animal"],
+      "allowed_operations": ["object_swap"]
+    },
+    "animal.bird": {
+      "coarse_type": "animal",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "animal.bird",
+      "sam3_prompt_templates": ["bird"],
+      "allowed_operations": ["object_swap"]
+    },
+    "animal.reptile_amphibian": {
+      "coarse_type": "animal",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "animal.reptile_amphibian",
+      "sam3_prompt_templates": ["reptile", "frog"],
       "allowed_operations": ["object_swap"]
     },
     "animal.generic": {
       "coarse_type": "animal",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "animal.generic",
       "sam3_prompt_templates": ["animal"],
       "allowed_operations": ["object_swap"]
     },
     "vehicle.road.car": {
       "coarse_type": "vehicle",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "vehicle.road.car_like",
       "sam3_prompt_templates": ["car", "vehicle"],
       "allowed_operations": ["object_swap"]
     },
     "vehicle.road.bus_truck_van": {
       "coarse_type": "vehicle",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "vehicle.road.car_like",
       "sam3_prompt_templates": ["bus", "truck", "van"],
       "allowed_operations": ["object_swap"]
     },
     "vehicle.road.motorcycle_bicycle": {
       "coarse_type": "vehicle",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "vehicle.road.two_wheel",
       "sam3_prompt_templates": ["motorcycle", "bicycle"],
+      "allowed_operations": ["object_swap"]
+    },
+    "vehicle.rail.train": {
+      "coarse_type": "vehicle",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "vehicle.rail",
+      "sam3_prompt_templates": ["train"],
       "allowed_operations": ["object_swap"]
     },
     "vehicle.air.aircraft": {
       "coarse_type": "vehicle",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "vehicle.air",
       "sam3_prompt_templates": ["airplane", "aircraft", "helicopter"],
       "allowed_operations": ["object_swap"]
     },
-    "vehicle.water.boat": {
+    "vehicle.air.balloon": {
       "coarse_type": "vehicle",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "vehicle.air.balloon",
+      "sam3_prompt_templates": ["hot air balloon", "balloon"],
+      "allowed_operations": ["object_swap"]
+    },
+    "vehicle.water.boat_ship": {
+      "coarse_type": "vehicle",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "vehicle.water",
       "sam3_prompt_templates": ["boat", "ship"],
       "allowed_operations": ["object_swap"]
     },
     "surface.screen": {
       "coarse_type": "surface",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "surface",
       "sam3_prompt_templates": ["display screen", "screen"],
-      "allowed_operations": ["surface_attribute_edit"]
+      "allowed_operations": ["surface_attribute_edit", "surface_content_edit"]
     },
     "surface.poster_sign": {
       "coarse_type": "surface",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "surface",
       "sam3_prompt_templates": ["poster", "sign", "billboard"],
-      "allowed_operations": ["surface_attribute_edit"]
+      "allowed_operations": ["surface_attribute_edit", "surface_content_edit"]
     },
     "surface.book_paper_map": {
       "coarse_type": "surface",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "surface",
       "sam3_prompt_templates": ["book", "paper", "map"],
-      "allowed_operations": ["surface_attribute_edit"]
+      "allowed_operations": ["surface_attribute_edit", "surface_content_edit"]
     },
     "surface.framed_art": {
       "coarse_type": "surface",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "surface",
       "sam3_prompt_templates": ["framed art", "painting"],
+      "allowed_operations": ["surface_attribute_edit", "surface_content_edit"]
+    },
+    "surface.apparel_panel": {
+      "coarse_type": "surface",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "surface",
+      "sam3_prompt_templates": ["clothing panel", "shirt front"],
+      "allowed_operations": ["surface_attribute_edit", "surface_content_edit"]
+    },
+    "surface.package_front": {
+      "coarse_type": "surface",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "surface",
+      "sam3_prompt_templates": ["package front", "box front"],
+      "allowed_operations": ["surface_attribute_edit", "surface_content_edit"]
+    },
+    "surface.vehicle_panel": {
+      "coarse_type": "surface",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "surface",
+      "sam3_prompt_templates": ["vehicle panel", "car door panel"],
       "allowed_operations": ["surface_attribute_edit"]
     },
     "object.lighting.street_light": {
       "coarse_type": "object",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.lighting.street",
       "sam3_prompt_templates": ["street light", "lamp post"],
       "allowed_operations": ["object_swap"]
     },
     "object.lighting.indoor_lamp": {
       "coarse_type": "object",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.lighting.indoor",
       "sam3_prompt_templates": ["lamp", "desk lamp"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.lighting.traffic_light": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.lighting.traffic",
+      "sam3_prompt_templates": ["traffic light"],
       "allowed_operations": ["object_swap"]
     },
     "object.furniture.chair": {
       "coarse_type": "object",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.furniture.chair",
       "sam3_prompt_templates": ["chair"],
       "allowed_operations": ["object_swap"]
     },
     "object.furniture.table": {
       "coarse_type": "object",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.furniture.table",
       "sam3_prompt_templates": ["table", "desk"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.furniture.bed_sofa_bench": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.furniture.bed_sofa_bench",
+      "sam3_prompt_templates": ["bed", "sofa", "bench"],
       "allowed_operations": ["object_swap"]
     },
     "object.bag_suitcase": {
       "coarse_type": "object",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.bag_suitcase",
       "sam3_prompt_templates": ["bag", "suitcase", "backpack"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.container": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.container",
+      "sam3_prompt_templates": ["box", "container", "bottle"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.electronics.phone_camera": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.electronics",
+      "sam3_prompt_templates": ["phone", "camera"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.tool_weapon": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.tool_weapon",
+      "sam3_prompt_templates": ["tool", "rifle", "gun"],
+      "allowed_operations": ["object_swap"]
+    },
+    "object.instrument_microphone": {
+      "coarse_type": "object",
+      "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.instrument_microphone",
+      "sam3_prompt_templates": ["instrument", "microphone"],
       "allowed_operations": ["object_swap"]
     },
     "object.handheld": {
       "coarse_type": "object",
       "visual_domain": "real",
-      "sam3_prompt_templates": ["handheld object"],
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.handheld",
+      "sam3_prompt_templates": ["handheld object", "umbrella", "watch"],
       "allowed_operations": ["object_swap"]
     },
     "object.food": {
       "coarse_type": "object",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.food",
       "sam3_prompt_templates": ["food item"],
       "allowed_operations": ["object_swap"]
     },
     "object.plant": {
       "coarse_type": "object",
       "visual_domain": "real",
-      "sam3_prompt_templates": ["plant"],
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.plant",
+      "sam3_prompt_templates": ["plant", "potted plant"],
       "allowed_operations": ["object_swap"]
     },
     "object.sports_ball": {
       "coarse_type": "object",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.sports_ball",
       "sam3_prompt_templates": ["ball"],
       "allowed_operations": ["object_swap"]
     },
     "object.generic": {
       "coarse_type": "object",
       "visual_domain": "real",
+      "sam3_candidate": true,
+      "compatibility_group_hint": "object.generic",
       "sam3_prompt_templates": ["object"],
       "allowed_operations": ["object_swap"]
+    },
+    "blocked.scene_structure": {
+      "coarse_type": "other",
+      "visual_domain": "real",
+      "sam3_candidate": false,
+      "compatibility_group_hint": "blocked",
+      "sam3_prompt_templates": [],
+      "allowed_operations": []
+    },
+    "blocked.background_natural": {
+      "coarse_type": "other",
+      "visual_domain": "real",
+      "sam3_candidate": false,
+      "compatibility_group_hint": "blocked",
+      "sam3_prompt_templates": [],
+      "allowed_operations": []
+    },
+    "blocked.text_overlay_or_logo": {
+      "coarse_type": "text_region",
+      "visual_domain": "real",
+      "sam3_candidate": false,
+      "compatibility_group_hint": "blocked",
+      "sam3_prompt_templates": [],
+      "allowed_operations": []
+    },
+    "blocked.dynamic_material": {
+      "coarse_type": "other",
+      "visual_domain": "real",
+      "sam3_candidate": false,
+      "compatibility_group_hint": "blocked",
+      "sam3_prompt_templates": [],
+      "allowed_operations": []
+    },
+    "blocked.body_part_or_tiny_detail": {
+      "coarse_type": "other",
+      "visual_domain": "real",
+      "sam3_candidate": false,
+      "compatibility_group_hint": "blocked",
+      "sam3_prompt_templates": [],
+      "allowed_operations": []
+    },
+    "blocked.collection_or_group": {
+      "coarse_type": "other",
+      "visual_domain": "real",
+      "sam3_candidate": false,
+      "compatibility_group_hint": "blocked",
+      "sam3_prompt_templates": [],
+      "allowed_operations": []
     },
     "unknown": {
       "coarse_type": "unknown",
       "visual_domain": "unclear",
+      "sam3_candidate": false,
+      "compatibility_group_hint": "unknown",
       "sam3_prompt_templates": [],
       "allowed_operations": []
     }
@@ -178,7 +402,56 @@
     "prefer_real_person_when_visible_and_not_tiny": true,
     "mark_uncertain_if_no_taxonomy_label_fits": true,
     "do_not_map_aircraft_to_road_vehicle": true,
+    "do_not_map_rail_vehicle_to_road_vehicle": true,
     "do_not_map_street_light_to_indoor_lamp": true,
-    "surface_text_regions_are_carrier_surfaces_not_internal_text": true
+    "surface_text_regions_are_carrier_surfaces_not_internal_text": true,
+    "non_sam3_labels_must_use_blocked_operation": true,
+    "map_unbounded_scene_structures_to_blocked": [
+      "building", "wall", "window", "door", "floor", "ceiling", "road",
+      "street", "bridge", "fence", "railing", "staircase"
+    ],
+    "map_natural_background_to_blocked": [
+      "sky", "cloud", "ocean", "water", "river", "lake", "grass", "ground",
+      "mountain", "forest", "sand", "snow"
+    ],
+    "map_text_overlay_logo_to_blocked": [
+      "subtitle", "watermark", "logo", "hud", "text overlay", "on-screen text"
+    ],
+    "map_dynamic_material_to_blocked": [
+      "smoke", "fog", "mist", "fire", "flame", "particles", "splash", "waves"
+    ]
+  },
+  "normalization_examples": {
+    "adult man": "person.real.unclear",
+    "woman facing camera": "person.real.front",
+    "cartoon character": "person.cartoon",
+    "3d character": "person.3d_character",
+    "statue": "person.statue_or_mannequin",
+    "dog": "animal.pet.dog_cat",
+    "elephant": "animal.large_mammal",
+    "bird": "animal.bird",
+    "car": "vehicle.road.car",
+    "bus": "vehicle.road.bus_truck_van",
+    "motorcycle": "vehicle.road.motorcycle_bicycle",
+    "train": "vehicle.rail.train",
+    "airplane": "vehicle.air.aircraft",
+    "boat": "vehicle.water.boat_ship",
+    "screen": "surface.screen",
+    "poster": "surface.poster_sign",
+    "book": "surface.book_paper_map",
+    "street light": "object.lighting.street_light",
+    "lamp": "object.lighting.indoor_lamp",
+    "traffic light": "object.lighting.traffic_light",
+    "chair": "object.furniture.chair",
+    "table": "object.furniture.table",
+    "bed": "object.furniture.bed_sofa_bench",
+    "bag": "object.bag_suitcase",
+    "phone": "object.electronics.phone_camera",
+    "rifle": "object.tool_weapon",
+    "sky": "blocked.background_natural",
+    "wall": "blocked.scene_structure",
+    "subtitle": "blocked.text_overlay_or_logo",
+    "smoke": "blocked.dynamic_material",
+    "hand": "blocked.body_part_or_tiny_detail"
   }
 }

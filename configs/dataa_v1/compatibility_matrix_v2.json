@@ -23,9 +23,33 @@
       "preferred_operation": "person_appearance_swap",
       "mask_policy": "person"
     },
-    "animal": {
-      "label_prefixes": ["animal."],
-      "allowed_with": ["animal"],
+    "animal.pet": {
+      "label_prefixes": ["animal.pet."],
+      "allowed_with": ["animal.pet"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "animal.large_mammal": {
+      "label_prefixes": ["animal.large_mammal"],
+      "allowed_with": ["animal.large_mammal"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "animal.bird": {
+      "label_prefixes": ["animal.bird"],
+      "allowed_with": ["animal.bird"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "animal.reptile_amphibian": {
+      "label_prefixes": ["animal.reptile_amphibian"],
+      "allowed_with": ["animal.reptile_amphibian"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "animal.generic": {
+      "label_prefixes": ["animal.generic"],
+      "allowed_with": ["animal.generic"],
       "preferred_operation": "object_swap",
       "mask_policy": "similar_object"
     },
@@ -41,9 +65,21 @@
       "preferred_operation": "object_swap",
       "mask_policy": "similar_object"
     },
+    "vehicle.air.balloon": {
+      "label_prefixes": ["vehicle.air.balloon"],
+      "allowed_with": ["vehicle.air.balloon"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
     "vehicle.air": {
-      "label_prefixes": ["vehicle.air."],
+      "label_prefixes": ["vehicle.air.aircraft"],
       "allowed_with": ["vehicle.air"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "vehicle.rail": {
+      "label_prefixes": ["vehicle.rail."],
+      "allowed_with": ["vehicle.rail"],
       "preferred_operation": "object_swap",
       "mask_policy": "similar_object"
     },
@@ -72,6 +108,12 @@
       "preferred_operation": "object_swap",
       "mask_policy": "bbox_for_thin_object"
     },
+    "object.lighting.traffic": {
+      "label_prefixes": ["object.lighting.traffic_light"],
+      "allowed_with": ["object.lighting.traffic"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "bbox_for_thin_object"
+    },
     "object.furniture.chair": {
       "label_prefixes": ["object.furniture.chair"],
       "allowed_with": ["object.furniture.chair"],
@@ -81,6 +123,12 @@
     "object.furniture.table": {
       "label_prefixes": ["object.furniture.table"],
       "allowed_with": ["object.furniture.table"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "object.furniture.bed_sofa_bench": {
+      "label_prefixes": ["object.furniture.bed_sofa_bench"],
+      "allowed_with": ["object.furniture.bed_sofa_bench"],
       "preferred_operation": "object_swap",
       "mask_policy": "similar_object"
     },
@@ -96,8 +144,50 @@
       "preferred_operation": "object_swap",
       "mask_policy": "bbox_for_small_or_irregular"
     },
+    "object.container": {
+      "label_prefixes": ["object.container"],
+      "allowed_with": ["object.container"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "object.electronics": {
+      "label_prefixes": ["object.electronics."],
+      "allowed_with": ["object.electronics"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "bbox_for_small_or_irregular"
+    },
+    "object.tool_weapon": {
+      "label_prefixes": ["object.tool_weapon"],
+      "allowed_with": ["object.tool_weapon"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "bbox_for_small_or_irregular"
+    },
+    "object.instrument_microphone": {
+      "label_prefixes": ["object.instrument_microphone"],
+      "allowed_with": ["object.instrument_microphone"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "bbox_for_small_or_irregular"
+    },
+    "object.food": {
+      "label_prefixes": ["object.food"],
+      "allowed_with": ["object.food"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "object.plant": {
+      "label_prefixes": ["object.plant"],
+      "allowed_with": ["object.plant"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
+    "object.sports_ball": {
+      "label_prefixes": ["object.sports_ball"],
+      "allowed_with": ["object.sports_ball"],
+      "preferred_operation": "object_swap",
+      "mask_policy": "similar_object"
+    },
     "object.generic": {
-      "label_prefixes": ["object.generic", "object.food", "object.plant", "object.sports_ball", "person.statue_or_mannequin"],
+      "label_prefixes": ["object.generic", "person.statue_or_mannequin"],
       "allowed_with": ["object.generic"],
       "preferred_operation": "object_swap",
       "mask_policy": "bbox_for_small_or_irregular"
@@ -113,6 +203,16 @@
       "target_prefix": "vehicle.road.",
       "donor_prefix": "vehicle.air.",
       "reason": "road_vehicle_not_aircraft"
+    },
+    {
+      "target_prefix": "vehicle.rail.",
+      "donor_prefix": "vehicle.road.",
+      "reason": "rail_vehicle_not_road_vehicle"
+    },
+    {
+      "target_prefix": "vehicle.road.",
+      "donor_prefix": "vehicle.rail.",
+      "reason": "road_vehicle_not_rail_vehicle"
     },
     {
       "target_prefix": "object.lighting.street_light",

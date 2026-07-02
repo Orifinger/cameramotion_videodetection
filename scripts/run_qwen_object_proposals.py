@@ -59,6 +59,7 @@ DEFAULT_MAX_SAM3_CANDIDATES = MAX_SAM3_CANDIDATES
 DEFAULT_MAX_DEFERRED_CANDIDATES = MAX_DEFERRED_CANDIDATES
 PROMPT_PROFILE = "default"
 MAX_INVENTORY_ENTITIES = 32
+TAXONOMY_V2_PATH = PROJECT_ROOT / "configs" / "dataa_v1" / "taxonomy_v2_seed.json"
 
 ALLOWED_SAM3_FAMILIES = {"physical_instance", "editable_surface"}
 ALLOWED_TARGET_SCOPES = {"whole_instance", "whole_surface"}
@@ -299,22 +300,47 @@ Important policy:
 Return JSON only. Do not include Markdown or explanations outside JSON.
 """
 
-NORMALIZED_INVENTORY_V2_PROMPT = f"""
+def build_taxonomy_prompt_block() -> str:
+    fallback = [
+        "person.real.front", "person.real.side", "person.real.back", "person.real.unclear",
+        "person.cartoon", "person.3d_character", "person.statue_or_mannequin",
+        "animal.generic", "vehicle.road.car", "vehicle.road.bus_truck_van",
+        "vehicle.road.motorcycle_bicycle", "vehicle.air.aircraft", "vehicle.water.boat_ship",
+        "surface.screen", "surface.poster_sign", "surface.book_paper_map", "surface.framed_art",
+        "object.lighting.street_light", "object.lighting.indoor_lamp", "object.generic",
+        "blocked.scene_structure", "blocked.background_natural", "blocked.text_overlay_or_logo",
+        "blocked.dynamic_material", "unknown",
+    ]
+    try:
+        taxonomy = json.loads(TAXONOMY_V2_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "\n".join(f"- `{label}`" for label in fallback)
+    labels = taxonomy.get("taxonomy_labels")
+    if not isinstance(labels, dict):
+        return "\n".join(f"- `{label}`" for label in fallback)
+    lines: list[str] = []
+    for label, meta in labels.items():
+        if not isinstance(meta, dict):
+            continue
+        templates = ", ".join(str(item) for item in (meta.get("sam3_prompt_templates") or [])[:4]) or "none"
+        operations = ", ".join(str(item) for item in (meta.get("allowed_operations") or [])) or "none"
+        group = clean_text(meta.get("compatibility_group_hint"), 80) or "unknown"
+        sam3_candidate = bool(meta.get("sam3_candidate", bool(meta.get("allowed_operations"))))
+        lines.append(
+            f"- `{label}`: sam3_candidate={str(sam3_candidate).lower()}; "
+            f"group={group}; operations={operations}; examples={templates}"
+        )
+    return "\n".join(lines) if lines else "\n".join(f"- `{label}`" for label in fallback)
+
+
+def build_normalized_inventory_prompt() -> str:
+    taxonomy_block = build_taxonomy_prompt_block()
+    return f"""
 You are normalizing a video object inventory into a fixed taxonomy for a SAM3 +
 VACE local editing dataset.
 
-Use the following target taxonomy labels when possible:
-- person.real.front, person.real.side, person.real.back, person.real.unclear
-- person.cartoon, person.3d_character, person.statue_or_mannequin
-- animal.generic
-- vehicle.road.car, vehicle.road.bus_truck_van, vehicle.road.motorcycle_bicycle
-- vehicle.air.aircraft, vehicle.water.boat
-- surface.screen, surface.poster_sign, surface.book_paper_map, surface.framed_art
-- object.lighting.street_light, object.lighting.indoor_lamp
-- object.furniture.chair, object.furniture.table
-- object.bag_suitcase, object.handheld, object.food, object.plant,
-  object.sports_ball, object.generic
-- unknown
+Use exactly one `taxonomy_label` from this list:
+{taxonomy_block}
 
 Return a JSON object with:
 - `schema_version`: "{INVENTORY_NORMALIZED_SCHEMA_VERSION}";
@@ -325,7 +351,8 @@ Return a JSON object with:
 Each entity must include the same fields as inventory_v2 plus:
 - `taxonomy_label`: one of the labels above;
 - `compatibility_group_hint`: a short group hint, such as person.real,
-  vehicle.road.car_like, vehicle.air, surface, object.bag_suitcase, or unknown.
+  vehicle.road.car_like, vehicle.air, surface, object.bag_suitcase, blocked, or
+  unknown.
 
 Rules:
 - If a visible non-tiny real person exists, label it as a person and mark it as
@@ -333,7 +360,15 @@ Rules:
 - Real people must not be normalized as cartoon/3D/statue/mannequin.
 - Aircraft must not be normalized as road vehicles; road vehicles must not be
   normalized as aircraft.
+- Trains must not be normalized as road vehicles.
 - Street lights must not be normalized as indoor lamps.
+- Buildings, walls, windows, doors, roads, floors, ceilings, bridges, fences,
+  railings, stairs, sky, clouds, water, grass, ground, mountains, text overlays,
+  subtitles, logos, watermarks, smoke, fog, fire, particles, body parts, tiny
+  details, and groups must use the best `blocked.*` label. Set
+  `suggested_operation` to blocked and set edit/donor suitability to bad or
+  maybe.
+- Only labels with sam3_candidate=true are allowed to become SAM3 mask targets.
 - If no taxonomy label fits, use unknown and explain in `uncertain_reason`.
 - `sam3_prompt_phrase` must be a short noun phrase suitable for SAM3.
 
@@ -345,7 +380,7 @@ def build_object_proposal_prompt(profile: str) -> str:
     if profile == "inventory_v2":
         return INVENTORY_V2_PROMPT
     if profile == "normalized_inventory_v2":
-        return NORMALIZED_INVENTORY_V2_PROMPT
+        return build_normalized_inventory_prompt()
     prompt = BASE_OBJECT_PROPOSAL_PROMPT.replace(
         f"Return at most {DEFAULT_MAX_SAM3_CANDIDATES} `sam3_candidates` and at most\n"
         f"{DEFAULT_MAX_DEFERRED_CANDIDATES} `deferred_candidates`.",
