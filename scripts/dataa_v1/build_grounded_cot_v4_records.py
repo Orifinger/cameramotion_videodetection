@@ -3,8 +3,8 @@
 
 The downstream v4 evidence-rescue script expects frame directories plus
 grounded evidence fields. Data A already knows the edited time range and mask
-bbox, so this adapter extracts aligned Real/Fake frames and emits records with
-``edit_time_range`` and normalized ``edit_bbox``.
+bbox, so this adapter extracts aligned full-video Real/Fake frames and emits
+records with a snapped ``edit_time_range`` and normalized ``edit_bbox``.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from scripts.dataa_v1.common import DataAError, utc_now_iso, write_json
 
 
 SCHEMA_VERSION = "dataA_v1_vace_grounded_cot_v4_record_v1"
+FRAME_SAMPLING_MODE = "full_video_uniform_frame_indices"
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -115,14 +116,6 @@ def _bbox(record: Mapping[str, Any]) -> tuple[list[int], list[int]] | None:
     return raw, norm
 
 
-def _linspace(start: float, end: float, count: int) -> list[float]:
-    if count <= 0:
-        return []
-    if count == 1:
-        return [round((start + end) / 2.0, 4)]
-    return [round(start + (end - start) * i / (count - 1), 4) for i in range(count)]
-
-
 def _existing_frames(frame_dir: Path) -> list[Path]:
     return sorted(frame_dir.glob("*.png"))
 
@@ -134,30 +127,96 @@ def _write_timestamps(frame_dir: Path, timestamps: Iterable[float]) -> None:
     )
 
 
-def _extract_frames(
+def _video_meta(record: Mapping[str, Any], role: str) -> dict[str, Any]:
+    video_meta = record.get("video_meta") if isinstance(record.get("video_meta"), Mapping) else {}
+    meta = video_meta.get(role) if isinstance(video_meta.get(role), Mapping) else {}
+    return dict(meta)
+
+
+def _sample_frame_indices(frame_count: int, max_frames: int) -> list[int]:
+    if frame_count <= 0 or max_frames <= 0:
+        return []
+    if frame_count <= max_frames:
+        return list(range(frame_count))
+    if max_frames == 1:
+        return [0]
+    return sorted({round(i * (frame_count - 1) / (max_frames - 1)) for i in range(max_frames)})
+
+
+def _timestamps_from_indices(frame_indices: Sequence[int], fps: float) -> list[float]:
+    if fps <= 0:
+        return [float(i) for i, _ in enumerate(frame_indices)]
+    return [round(float(index) / fps, 4) for index in frame_indices]
+
+
+def _snap_range_to_timestamps(time_range: Sequence[float], timestamps: Sequence[float]) -> list[float]:
+    if not timestamps:
+        return [round(float(time_range[0]), 2), round(float(time_range[1]), 2)]
+
+    def nearest(value: float) -> float:
+        return float(min(timestamps, key=lambda item: abs(float(item) - value)))
+
+    start = nearest(float(time_range[0]))
+    end = nearest(float(time_range[1]))
+    if end < start:
+        start, end = end, start
+    return [round(start, 2), round(end, 2)]
+
+
+def _frame_meta_path(frame_dir: Path) -> Path:
+    return frame_dir / "frame_sampling_meta.json"
+
+
+def _can_reuse_frames(
+    *,
+    frame_dir: Path,
+    video_path: Path,
+    frame_indices: Sequence[int],
+    timestamps: Sequence[float],
+) -> bool:
+    if len(_existing_frames(frame_dir)) != len(frame_indices):
+        return False
+    meta_path = _frame_meta_path(frame_dir)
+    ts_path = frame_dir / "timestamps.txt"
+    if not meta_path.is_file() or not ts_path.is_file():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return (
+        meta.get("sampling_mode") == FRAME_SAMPLING_MODE
+        and meta.get("video_path") == str(video_path)
+        and meta.get("frame_indices") == [int(v) for v in frame_indices]
+        and meta.get("timestamps_sec") == [round(float(v), 4) for v in timestamps]
+    )
+
+
+def _extract_full_video_frames(
     *,
     video_path: Path,
     frame_dir: Path,
-    start: float,
-    end: float,
-    max_frames: int,
+    frame_indices: Sequence[int],
+    timestamps: Sequence[float],
     ffmpeg_bin: str,
     overwrite: bool,
-) -> tuple[list[str], list[float]]:
+) -> list[str]:
     if not video_path.is_file():
         raise DataAError(f"missing video: {video_path}")
+    if not frame_indices:
+        raise DataAError(f"empty_frame_indices:{video_path}")
     frame_dir.mkdir(parents=True, exist_ok=True)
-    if not overwrite:
-        existing = _existing_frames(frame_dir)
-        ts_path = frame_dir / "timestamps.txt"
-        if existing and ts_path.is_file():
-            timestamps = [float(line.strip()) for line in ts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            return [str(path) for path in existing], timestamps[: len(existing)]
+    if not overwrite and _can_reuse_frames(
+        frame_dir=frame_dir,
+        video_path=video_path,
+        frame_indices=frame_indices,
+        timestamps=timestamps,
+    ):
+        return [str(path) for path in _existing_frames(frame_dir)]
     for path in _existing_frames(frame_dir):
         path.unlink()
 
-    duration = max(0.04, float(end) - float(start))
-    fps = max(1.0, float(max_frames) / duration)
+    terms = "+".join(f"eq(n\\,{int(index)})" for index in frame_indices)
     output_pattern = str(frame_dir / "%04d.png")
     cmd = [
         ffmpeg_bin,
@@ -165,16 +224,12 @@ def _extract_frames(
         "-loglevel",
         "error",
         "-y",
-        "-ss",
-        f"{max(0.0, float(start)):.6f}",
         "-i",
         str(video_path),
-        "-t",
-        f"{duration:.6f}",
         "-vf",
-        f"fps={fps:.8f}",
-        "-frames:v",
-        str(max_frames),
+        f"select='{terms}',setpts=N/TB",
+        "-vsync",
+        "0",
         output_pattern,
     ]
     result = subprocess.run(cmd, text=True, capture_output=True)
@@ -183,9 +238,23 @@ def _extract_frames(
     frames = _existing_frames(frame_dir)
     if not frames:
         raise DataAError(f"ffmpeg_extract_empty:{video_path}")
-    timestamps = _linspace(float(start), float(end), len(frames))
+    if len(frames) != len(frame_indices):
+        raise DataAError(f"ffmpeg_extract_count_mismatch:{video_path}:expected={len(frame_indices)} got={len(frames)}")
     _write_timestamps(frame_dir, timestamps)
-    return [str(path) for path in frames], timestamps
+    _frame_meta_path(frame_dir).write_text(
+        json.dumps(
+            {
+                "sampling_mode": FRAME_SAMPLING_MODE,
+                "video_path": str(video_path),
+                "frame_indices": [int(v) for v in frame_indices],
+                "timestamps_sec": [round(float(v), 4) for v in timestamps],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return [str(path) for path in frames]
 
 
 def _target_record(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -222,25 +291,33 @@ def _build_record(
     if not fake_video.is_file():
         return None, "missing_fake_video"
 
+    fake_meta = _video_meta(record, "fake")
+    real_meta = _video_meta(record, "real")
+    frame_count = int(fake_meta.get("frame_count") or real_meta.get("frame_count") or 0)
+    fps = float(fake_meta.get("fps") or real_meta.get("fps") or 0.0)
+    frame_indices = _sample_frame_indices(frame_count, max_frames)
+    frame_timestamps = _timestamps_from_indices(frame_indices, fps)
+    if not frame_indices:
+        return None, "missing_video_frame_meta"
+    snapped_time_range = _snap_range_to_timestamps(time_range, frame_timestamps)
+
     case_frame_root = frame_root / case_id
     real_frame_dir = case_frame_root / "real"
     fake_frame_dir = case_frame_root / "fake"
     if extract_frames:
-        _extract_frames(
+        _extract_full_video_frames(
             video_path=real_video,
             frame_dir=real_frame_dir,
-            start=time_range[0],
-            end=time_range[1],
-            max_frames=max_frames,
+            frame_indices=frame_indices,
+            timestamps=frame_timestamps,
             ffmpeg_bin=ffmpeg_bin,
             overwrite=overwrite_frames,
         )
-        _extract_frames(
+        _extract_full_video_frames(
             video_path=fake_video,
             frame_dir=fake_frame_dir,
-            start=time_range[0],
-            end=time_range[1],
-            max_frames=max_frames,
+            frame_indices=frame_indices,
+            timestamps=frame_timestamps,
             ffmpeg_bin=ffmpeg_bin,
             overwrite=overwrite_frames,
         )
@@ -257,8 +334,12 @@ def _build_record(
         "fake_video": str(fake_video),
         "real_frame_dir": str(real_frame_dir),
         "fake_frame_dir": str(fake_frame_dir),
-        "edit_time_range": [round(float(time_range[0]), 2), round(float(time_range[1]), 2)],
-        "time_range": [round(float(time_range[0]), 2), round(float(time_range[1]), 2)],
+        "edit_time_range": snapped_time_range,
+        "time_range": snapped_time_range,
+        "edit_time_range_source_sec": [round(float(time_range[0]), 4), round(float(time_range[1]), 4)],
+        "frame_sampling_mode": FRAME_SAMPLING_MODE,
+        "frame_indices": frame_indices,
+        "frame_timestamps_sec": frame_timestamps,
         "edit_bbox": norm_bbox,
         "evidence_bbox": norm_bbox,
         "edit_bbox_source_xyxy": raw_bbox,
@@ -326,6 +407,7 @@ def build_records(
         "source_record_count": len(source_rows),
         "record_count": len(records),
         "max_frames": int(max_frames),
+        "frame_sampling_mode": FRAME_SAMPLING_MODE,
         "run_counts": dict(run_counts),
         "vace_model_counts": dict(model_counts),
         "operation_counts": dict(op_counts),
