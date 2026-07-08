@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +42,15 @@ def is_image(path: Path) -> bool:
     return path.suffix.lower() in IMAGE_SUFFIXES
 
 
-def resize_one(src: Path, dst: Path, size: tuple[int, int], overwrite: bool) -> str:
+def resize_one(
+    src: Path,
+    dst: Path,
+    size: tuple[int, int],
+    overwrite: bool,
+    *,
+    png_compress_level: int,
+    jpeg_quality: int,
+) -> str:
     if dst.exists() and not overwrite:
         try:
             with Image.open(dst) as im:
@@ -53,15 +63,36 @@ def resize_one(src: Path, dst: Path, size: tuple[int, int], overwrite: bool) -> 
     with Image.open(src) as im:
         # Exact whole-image affine resize: no crop, no padding. Normalized bbox
         # coordinates remain valid because the entire image coordinate system is
-        # scaled uniformly in x and y.
+        # scaled in x and y together with the image.
         if im.mode not in {"RGB", "RGBA"}:
             im = im.convert("RGB")
         resized = im.resize(size, Image.Resampling.LANCZOS)
         save_kwargs: dict[str, Any] = {}
-        if dst.suffix.lower() in {".jpg", ".jpeg"}:
-            save_kwargs.update({"quality": 95, "subsampling": 0})
+        suffix = dst.suffix.lower()
+        if suffix in {".jpg", ".jpeg"}:
+            save_kwargs.update({"quality": jpeg_quality, "subsampling": 0})
+        elif suffix == ".png":
+            save_kwargs.update({"compress_level": png_compress_level})
         resized.save(dst, **save_kwargs)
     return "written"
+
+
+def resize_image_job(job: tuple[str, str, tuple[int, int], bool, int, int]) -> tuple[str, str]:
+    src_text, dst_text, size, overwrite, png_compress_level, jpeg_quality = job
+    src = Path(src_text)
+    dst = Path(dst_text)
+    try:
+        status = resize_one(
+            src,
+            dst,
+            size,
+            overwrite,
+            png_compress_level=png_compress_level,
+            jpeg_quality=jpeg_quality,
+        )
+        return status, ""
+    except Exception as exc:
+        return "failed", f"[FAILED] {src} -> {dst}: {exc}"
 
 
 def resize_tree(
@@ -71,6 +102,10 @@ def resize_tree(
     size: tuple[int, int],
     overwrite: bool,
     copy_non_images: bool,
+    workers: int,
+    progress_every: int,
+    png_compress_level: int,
+    jpeg_quality: int,
 ) -> dict[str, int]:
     if not src_root.exists():
         raise FileNotFoundError(f"source root does not exist: {src_root}")
@@ -85,23 +120,59 @@ def resize_tree(
         "non_images_skipped": 0,
     }
 
+    image_jobs: list[tuple[str, str, tuple[int, int], bool, int, int]] = []
+    non_image_pairs: list[tuple[Path, Path]] = []
+
     for src in src_root.rglob("*"):
         if not src.is_file():
             continue
         rel = src.relative_to(src_root)
         dst = dst_root / rel
         if is_image(src):
-            try:
-                status = resize_one(src, dst, size, overwrite)
-            except Exception as exc:
-                stats["images_failed"] += 1
-                print(f"[FAILED] {src} -> {dst}: {exc}")
-                continue
+            image_jobs.append(
+                (str(src), str(dst), size, overwrite, png_compress_level, jpeg_quality)
+            )
+        else:
+            non_image_pairs.append((src, dst))
+
+    print(f"Discovered {len(image_jobs)} images and {len(non_image_pairs)} non-image files.")
+    if workers <= 0:
+        workers = os.cpu_count() or 1
+    workers = max(1, workers)
+    print(f"Using workers: {workers}")
+
+    processed = 0
+    if workers == 1:
+        for job in image_jobs:
+            status, message = resize_image_job(job)
             if status == "written":
                 stats["images_written"] += 1
-            else:
+            elif status == "skipped":
                 stats["images_skipped"] += 1
-        elif copy_non_images:
+            else:
+                stats["images_failed"] += 1
+                print(message)
+            processed += 1
+            if progress_every > 0 and processed % progress_every == 0:
+                print(f"Processed {processed}/{len(image_jobs)} images...")
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(resize_image_job, job) for job in image_jobs]
+            for future in as_completed(futures):
+                status, message = future.result()
+                if status == "written":
+                    stats["images_written"] += 1
+                elif status == "skipped":
+                    stats["images_skipped"] += 1
+                else:
+                    stats["images_failed"] += 1
+                    print(message)
+                processed += 1
+                if progress_every > 0 and processed % progress_every == 0:
+                    print(f"Processed {processed}/{len(image_jobs)} images...")
+
+    for src, dst in non_image_pairs:
+        if copy_non_images:
             if dst.exists() and not overwrite:
                 stats["non_images_skipped"] += 1
                 continue
@@ -159,6 +230,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--size", type=parse_size, default=parse_size("672x384"))
     parser.add_argument("--overwrite", action="store_true", help="Recreate existing resized images.")
     parser.add_argument("--copy-non-images", action="store_true", help="Copy non-image files too.")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Parallel image resize workers. Use 0 for os.cpu_count().",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=1000,
+        help="Print progress every N processed images; 0 disables progress logs.",
+    )
+    parser.add_argument(
+        "--png-compress-level",
+        type=int,
+        default=1,
+        choices=range(0, 10),
+        metavar="[0-9]",
+        help="PNG compression level. Lower is faster and larger; default 1.",
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=95,
+        help="JPEG quality when resizing jpg/jpeg files.",
+    )
     parser.add_argument("--input-json", default=None, help="Optional SFT JSON to rewrite.")
     parser.add_argument("--output-json", default=None, help="Output path for rewritten SFT JSON.")
     return parser.parse_args()
@@ -175,6 +272,10 @@ def main() -> None:
         size=args.size,
         overwrite=args.overwrite,
         copy_non_images=args.copy_non_images,
+        workers=args.workers,
+        progress_every=args.progress_every,
+        png_compress_level=args.png_compress_level,
+        jpeg_quality=args.jpeg_quality,
     )
     print("== resize stats ==")
     for key, value in stats.items():
