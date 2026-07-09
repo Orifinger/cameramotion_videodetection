@@ -270,6 +270,8 @@ def make_pair_record(
             f"<bbox>[{fake['bbox']}]</bbox>",
             "",
             "Infer camera motion and select which video contains the local synthetic edit.",
+            "Output exactly one tag: <edited_video>A</edited_video> or <edited_video>B</edited_video>.",
+            "Do not output Fake/Real for this pair-selection task.",
         ]
     )
     assistant = "\n".join(
