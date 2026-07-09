@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build DataA paired-region pretext data without long camera templates.
+"""Build DataA paired-region pretext/probe data without long camera templates.
 
 The generated tasks use DataA's strongest existing supervision:
 
@@ -7,9 +7,10 @@ The generated tasks use DataA's strongest existing supervision:
     real: normal target region
     fake: local edited/artifact target region
 
-Outputs are compact XML tags rather than generated CoT. This is meant for a
-Stage-2 pretext smoke test after the residual probe shows that camera
-compensated local evidence is useful.
+Outputs are compact XML tags rather than generated CoT. The pair-selection task
+is useful as a training-free diagnostic: if a detector cannot choose the edited
+video from a same-scene real/fake pair, DataA local-edit supervision is probably
+too weak for the next route.
 """
 
 from __future__ import annotations
@@ -289,6 +290,10 @@ def make_pair_record(
         "case_id": case_id,
         "pretext_task": "pair_selection",
         "edited_video": edited_video,
+        "video_a_source_split": video_a["split"],
+        "video_b_source_split": video_b["split"],
+        "artifact_type": fake["artifact_type"],
+        "camera_labels": fake.get("camera_labels", []),
     }
 
 
