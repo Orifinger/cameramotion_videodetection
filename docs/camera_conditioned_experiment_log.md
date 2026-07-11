@@ -14,7 +14,7 @@
 | 2026-07-09 | 不训练模型、直接追加相机描述的检测消融 | 未通过 | 给旧检测模型直接追加正确相机描述，是否无需训练即可提升检测 | 正确相机没有优于错误相机或无相机，直接提示注入失败 |
 | 2026-07-10 | 普通 DataB 续训与相机文本 DataB 续训 | 未通过 | 经过匹配提示格式训练后，模型是否真正利用正确相机描述改善检测 | 正确相机描述不优于错误描述，并低于不提供相机描述；当前文本条件注入路线未学会利用相机内容 |
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
-| 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 基线与 DPO smoke 待执行 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | Gate 0 已通过；Gate 1 使用 LlamaFactory LoRA-DPO，从同一 detection checkpoint 学习 A/B 双顺序选择与真实 mask 定位 |
+| 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 未通过，训练动态复核中 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 最终 LoRA-DPO 相对训练前基线未提升选择、定位或位置平衡；先读取 DPO reward 动态并评测半程 checkpoint-95，不进入 GRPO 或检测迁移 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -401,6 +401,32 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 - 已知限制：Gate 1 只验证配对任务可学习性，不等于普通二分类迁移，不建立 camera 独立贡献。
 - 完整执行说明：`docs/gate1_pair_dpo_execution_20260711.md`。
 - 下一步：先跑初始 checkpoint 的 642 条 baseline，再跑 64 条数据、2 optimizer step 的 DPO smoke；smoke 通过后才运行完整 1 epoch。
+
+##### 2026-07-11 Gate 1 训练前基线与最终 DPO 结果
+
+结果来源：
+
+- 训练前基线：`/tmp/1res/gate1_pair_eval/Qwen3-VL-8B-gate1-pair-baseline/eval/dataa_counterfactual_pair_gate_summary.json`。
+- 最终 DPO：`/tmp/1res/gate1_pair_eval/Qwen3-VL-8B-gate1-pair-dpo/eval/dataa_counterfactual_pair_gate_summary.json`。
+- DPO adapter：`/tmp/1res/gate1_pair_dpo_local_only`，包含 `checkpoint-95` 与 `checkpoint-189`。
+- 最终合并模型：`/tmp/1res/gate1_pair_dpo_local_only_merged`。
+
+| 指标 | 训练前基线 | 最终 DPO | DPO - 基线 | 验收线 |
+|---|---:|---:|---:|---:|
+| 选择格式正确率 | 96.57% | 95.17% | -1.40 点 | ≥95% |
+| bbox 格式正确率 | 100% | 100% | 0 | ≥95% |
+| pair 选择准确率 | 69.31% | 68.85% | -0.47 点 | ≥70% |
+| 预测 A 比例 | 39.52% | 39.93% | +0.42 点 | 45%-55% |
+| mean bbox IoU | 0.4533 | 0.4482 | -0.0052 | ≥0.30 |
+| bbox IoU@0.3 | 68.85% | 68.07% | -0.78 点 | - |
+| swap consistency | 55.14% | 55.76% | +0.62 点 | ≥85% |
+| 双顺序均正确 | 48.29% | 48.60% | +0.31 点 | - |
+
+各 motion 分桶没有一致改善：`complex-motion` 选择准确率下降 0.70 点，`minor-motion` 下降 1.06 点，`no-motion` 提高 0.82 点。最终模型仍明显偏向预测 B，且 swap consistency 只有约 56%。
+
+这次实际测试的是：固定初始 detection checkpoint、真实 mask 对齐的 local-only 双顺序偏好数据和 LoRA-DPO，能否让模型学会局部编辑选择与定位。它没有测试 camera 增量，因为 camera 标签没有进入 prompt；也没有进入普通 Real/Fake 检测迁移。
+
+结论标记：`未通过`。最终 DPO 没有超过训练前基线，不能继续把该模型用于 Gate 2，也不能据此启动 camera+pair 或 GRPO。下一步先审计 `trainer_log.jsonl` 中 chosen/rejected reward margin 与 reward accuracy，并低成本合并、评测 `checkpoint-95`；若半程同样无提升，则停止当前 synthetic-rejected DPO 配方，重新选择更直接的配对监督或模型错误驱动的偏好数据。
 
 
 ## 记录维护说明
