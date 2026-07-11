@@ -428,6 +428,29 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 
 结论标记：`未通过`。最终 DPO 没有超过训练前基线，不能继续把该模型用于 Gate 2，也不能据此启动 camera+pair 或 GRPO。下一步先审计 `trainer_log.jsonl` 中 chosen/rejected reward margin 与 reward accuracy，并低成本合并、评测 `checkpoint-95`；若半程同样无提升，则停止当前 synthetic-rejected DPO 配方，重新选择更直接的配对监督或模型错误驱动的偏好数据。
 
+##### 2026-07-11 DPO 训练动态审计
+
+结果来源：
+
+- `/tmp/1res/gate1_pair_dpo_local_only/all_results.json`。
+- `/tmp/1res/gate1_pair_dpo_local_only/trainer_log.jsonl`。
+
+| 训练位置 | loss | batch preference accuracy |
+|---|---:|---:|
+| step 5 / 189 | 0.6922 | 31.25% |
+| step 25 / 189 | 0.5998 | 83.75% |
+| step 60 / 189 | 0.3445 | 82.50% |
+| step 95 / 189，0.50 epoch | 0.3715 | 82.50% |
+| step 150 / 189 | 0.3470 | 78.75% |
+| step 185 / 189 | 0.3403 | 82.50% |
+| 全程汇总 | 0.4103 | - |
+
+完整训练耗时 1449.5 秒，约 24 分 10 秒，189 个 optimizer step 正常完成。日志只输出聚合 `accuracy`，没有单独输出 chosen/rejected reward 与 margin。
+
+训练目标本身确实被优化：loss 明显下降，训练 batch 上 chosen 相对 rejected 的偏好准确率稳定到约 80%-85%。因此最终 Gate 1 无提升不能归因于 adapter 未加载、DPO 没有反向传播或训练没有完成。更符合结果的解释是：当前人工 rejected 很容易在 teacher-forced 序列概率上被排序，但这种排序没有迁移为 held-out 样本上的贪心 A/B 选择、顺序一致性或更好定位。
+
+结论标记维持 `未通过`。为排除后半程退化，只再评测现有 `checkpoint-95`，不追加训练；若半程仍不优于基线，则停止当前 synthetic-rejected DPO 配方，不通过增加 epoch、提高学习率或直接切 GRPO 继续试参。
+
 
 ## 记录维护说明
 
