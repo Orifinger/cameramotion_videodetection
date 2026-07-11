@@ -15,6 +15,7 @@
 | 2026-07-10 | 普通 DataB 续训与相机文本 DataB 续训 | 未通过 | 经过匹配提示格式训练后，模型是否真正利用正确相机描述改善检测 | 正确相机描述不优于错误描述，并低于不提供相机描述；当前文本条件注入路线未学会利用相机内容 |
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
+| 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 待运行 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 已锁定 40step_v3 数据契约和三组对照；先跑离线权重、mask 时间映射及少量 case smoke，未通过前不进入 DataB、Qwen 或 RL |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -468,6 +469,63 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 半程与最终模型在关键决策指标上几乎相同，均没有超过训练前基线；只有不足 1 个百分点的随机级波动。结合训练 loss 与偏好 accuracy 已正常收敛，可排除“后半程退化”和“再减少 epoch 即可恢复”的解释。
 
 结论标记：`未通过`，当前 synthetic-rejected LoRA-DPO 配方正式停止。它说明当前人工构造的错误视频/错误 bbox 序列偏好目标与 held-out 贪心生成决策不一致，不说明 Gate 0 的局部信号不存在。下一项最低成本验证应使用每个顺序唯一正确答案的双顺序直接监督，在同一 held-out Gate 1 上判断模型是否能直接学会该任务；该验证通过前不构造 hard-negative DPO、不进入检测迁移，也不启动 GRPO。
+
+
+## 10. 相机补偿局部感知轨迹最小验证
+
+### 这个实验测什么
+
+这个实验测试：在输入帧数量、局部 mask 监督和轻量分类头完全一致时，用稠密光流估计并补偿全局相机运动，是否能让局部 DINOv2 patch 轨迹比未补偿版本更可靠地识别局部生成编辑。
+
+### 状态与日期
+
+- 日期：2026-07-12。
+- 状态：`待运行`，代码与执行契约已开始实施，尚无实验结果。
+- 完整执行说明：`docs/camera_aligned_local_trajectory_gate_20260712.md`。
+
+### 模型与数据
+
+- 冻结视觉特征：`facebook/dinov2-small`，服务器默认路径 `/home/admin/dinov2-small`；实际内部模型目录也可能为 `/.aistudio/aistudio-modelhub/zeta/f94249_32800136/hugging_face/facebook__dinov2-small`。
+- 冻结光流：TorchVision RAFT-Large，权重 `/home/admin/raft_large_C_T_SKHT_V2-ff5fadd5.pth`。
+- 备用正式后端：SEA-RAFT，权重 `/home/admin/MemorySlices/Tartan-C-T-TSKH-spring540x960-M/model.safetensors`；第一轮不启用。
+- 统一 case/证据数据：`res/dataA_v1/autolabel/dataa_vace_grounded_cot_v4_records_40step_v3.jsonl`。
+- 统一 camera 数据：`camera/camerajson/dataa_cameramotion_labels_40step_v3.jsonl`。
+- held-out test 身份：`tools/data/camera_motion_splits/dataA_test.json` 中既有 case ids；重新生成视频不能改变原 test 身份。
+- 数据规模：1080 个 Real/Fake cases，由 198 个既有 VACE-14B、714 个新 VACE-1.3B dataset 40-step 和 168 个新 VACE-1.3B textedit 40-step 组成。
+
+### 三个实验条件
+
+1. 全局 ReStraV 风格轨迹：冻结 DINOv2 CLS 特征和 21 维轨迹统计。
+2. 局部轨迹但不补偿相机：密集原视频帧、固定坐标 patch 轨迹和总光流。
+3. 相机补偿局部轨迹：相同帧和监督，独立估计每个视频的全局运动，对齐 patch 后计算局部轨迹，并使用去除全局相机场后的残余光流。
+
+唯一 camera 增量比较是条件 3 对条件 2；条件 1 只作为现有全局轨迹方法参照。Real/Fake 都单独估计相机运动，配对 Real 的变换不能作为 Fake 输入。GT mask 不参与相机拟合，只参与 train patch 标签和 test 定位评测。
+
+### 主要设置
+
+- 从原视频最高按 8 FPS 采样，不直接把均匀抽取的 16 张图片当连续光流帧。
+- 每个窗口 16 帧、步长 8 帧，只在短窗口内累计变换。
+- 前后向 RAFT 一致性过滤；主导单应性拟合失败时退化为仿射或平移。
+- VACE mask 通过 case manifest 的 canonical-to-source frame mapping 对齐原视频时间，不使用旧版均匀位置近似。
+- 三组条件共用 ReStraV 风格的 `64→32→1` 轻量 MLP，只在 DataA train 训练；阈值从 train 内 case-level validation 选择，最终 321 个 test cases 不参与训练和阈值选择。
+
+### 验收标准
+
+提取阶段必须满足：feature 覆盖率至少 95%、正 mask case 率至少 90%、相机拟合 inlier rate 中位数至少 50%、同源 Real/Fake 独立相机估计的角点差异中位数不超过图像对角线 2%，并且 feature 无 NaN/Inf。
+
+方法阶段必须同时满足：相机补偿相对未补偿的整体视频 AUC 提升至少 3 个百分点、`complex-motion` AUC 提升至少 3 个百分点、`no-motion` AUC 下降不超过 2 个百分点，并且 case bootstrap 的 AUC 差值 95% 置信区间下界高于 0。
+
+### 已知风险与不建立的结论
+
+- 新 40-step 数据与旧 DataA 生成结果不同，旧 Gate 0/Gate 1 数值不作为当前数据结果。
+- DataA 是局部同源编辑，第一闸门通过也不等于 VIF-Bench 或 DataB 泛化通过。
+- camera label 只用于分桶和审计；当前方法使用从视频估计的几何运动，不把 caption 注入 prompt。
+- 第一轮不测试 SEA-RAFT 对 RAFT 的替换收益，不测试 Qwen、DataB、SFT、DPO 或 GRPO。
+- 未通过前不扩展训练；通过后下一步才是 DataB 弱监督迁移和 Qwen 局部证据注入。
+
+### 立即下一步
+
+先在服务器执行严格 manifest/权重预检，再对每个 motion bucket 两个 train case 跑 GPU smoke。smoke 输出和 mask 映射审计通过后才运行 16 卡全量特征提取。
 
 
 ## 记录维护说明
