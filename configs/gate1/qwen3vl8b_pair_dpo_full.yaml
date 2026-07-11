@@ -1,0 +1,50 @@
+### model
+model_name_or_path: /tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115
+image_max_pixels: 262144
+video_max_pixels: 16384
+trust_remote_code: true
+
+### method
+stage: dpo
+do_train: true
+finetuning_type: lora
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target: all
+pref_beta: 0.1
+pref_loss: sigmoid
+deepspeed: /input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory/examples/deepspeed/ds_z2_config.json
+flash_attn: fa2
+
+### dataset
+dataset_dir: /input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory/data
+dataset: dataa_counterfactual_dpo_local_only
+template: qwen3_vl
+cutoff_len: 49152
+max_samples: 10000
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 8
+
+### output
+output_dir: /tmp/1res/gate1_pair_dpo_local_only
+logging_steps: 5
+save_steps: 95
+save_total_limit: 2
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: tensorboard
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 5.0e-6
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null

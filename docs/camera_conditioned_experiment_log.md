@@ -14,7 +14,7 @@
 | 2026-07-09 | 不训练模型、直接追加相机描述的检测消融 | 未通过 | 给旧检测模型直接追加正确相机描述，是否无需训练即可提升检测 | 正确相机没有优于错误相机或无相机，直接提示注入失败 |
 | 2026-07-10 | 普通 DataB 续训与相机文本 DataB 续训 | 未通过 | 经过匹配提示格式训练后，模型是否真正利用正确相机描述改善检测 | 正确相机描述不优于错误描述，并低于不提供相机描述；当前文本条件注入路线未学会利用相机内容 |
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
-| 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 0 通过，Gate 1 待执行 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 固定 seed 随机 200 对与完整 755 个 train pair 均正式通过；DataA 具备稳定的真实 mask 局部反事实信号，下一步验证模型能否学会 A/B 选择与定位 |
+| 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 基线与 DPO smoke 待执行 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | Gate 0 已通过；Gate 1 使用 LlamaFactory LoRA-DPO，从同一 detection checkpoint 学习 A/B 双顺序选择与真实 mask 定位 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -384,6 +384,23 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 两次复核的核心指标接近，说明首次结果不是排序抽样偶然性。完整训练集只有 1/755 个 pair 的 mask 内差异未高于 mask 外，且总体中位数比值仍为 8.33；局部反事实信号稳定存在。
 
 结论标记：`通过`。Gate 0 只建立“DataA 中存在可学习的、真实 mask 对齐的局部差异”，不建立“MLLM 已能利用该差异”或“camera 已能提高检测”。下一步进入 Gate 1 的最小配对学习，对 held-out 321 个 case 做 A/B 双顺序选择、swap consistency 与 bbox IoU 验收；暂不直接运行 GRPO。
+
+#### 2026-07-11 Gate 1 局部配对 DPO
+
+这个实验测试：在不向 prompt 注入 camera 标签、GT bbox 或 GT 时间的情况下，局部同源配对偏好是否能让模型消除 A/B 位置偏置，并从视频中选择局部编辑版本、定位真实 VACE mask。
+
+- 状态：训练前 baseline 与两步 DPO smoke 待执行。
+- 初始模型：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
+- 训练数据：`/tmp/1res/counterfactual_gate/data/dataa_counterfactual_dpo_local_only.json`，755 个 train case、3020 条偏好记录。
+- held-out 评测：`/tmp/1res/counterfactual_gate/data/dataa_counterfactual_eval_local_only.json`，321 个 test case、642 条双顺序记录。
+- 单一训练因素：在相同初始 checkpoint 上加入 local-only LoRA-DPO；训练前 checkpoint 是第一对照，Gate 1 通过后再补等步数 detection replay 迁移对照。
+- 主要设置：LlamaFactory、LoRA rank 16、sigmoid DPO、`pref_beta=0.1`、学习率 `5e-6`、1 epoch、16 卡全局 batch 16、ZeRO-2、视觉像素上限 262144。
+- 训练输出：`/tmp/1res/gate1_pair_dpo_local_only`；合并模型：`/tmp/1res/gate1_pair_dpo_local_only_merged`。
+- 验收标准：选择准确率 ≥70%、swap consistency ≥85%、预测 A 比例 45% 至 55%、mean bbox IoU ≥0.30、两类格式正确率 ≥95%。
+- 泄漏约束：train/test 按 case 隔离；每个 train case 两种顺序同时存在；评测 prompt 不包含 GT bbox；camera 标签不进入 local-only prompt。
+- 已知限制：Gate 1 只验证配对任务可学习性，不等于普通二分类迁移，不建立 camera 独立贡献。
+- 完整执行说明：`docs/gate1_pair_dpo_execution_20260711.md`。
+- 下一步：先跑初始 checkpoint 的 642 条 baseline，再跑 64 条数据、2 optimizer step 的 DPO smoke；smoke 通过后才运行完整 1 epoch。
 
 
 ## 记录维护说明

@@ -1,0 +1,12 @@
+### model
+model_name_or_path: /tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115
+adapter_name_or_path: /tmp/1res/gate1_pair_dpo_local_only
+template: qwen3_vl
+finetuning_type: lora
+trust_remote_code: true
+
+### export
+export_dir: /tmp/1res/gate1_pair_dpo_local_only_merged
+export_size: 5
+export_device: cpu
+export_legacy_format: false

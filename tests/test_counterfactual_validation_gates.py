@@ -134,6 +134,35 @@ class CounterfactualGateIntegrationTests(unittest.TestCase):
         self.assertEqual(summary["counts"]["dpo_records_per_variant"], 12)
         self.assertEqual(summary["counts"]["eval_records_per_variant"], 2)
 
+        llamafactory_data = self.root / "llamafactory" / "data"
+        write_json(llamafactory_data / "dataset_info.json", {"existing": {"file_name": "keep.json"}})
+        run_script(
+            "tools/install_gate1_llamafactory_data.py",
+            "--source-json", out_dir / "dataa_counterfactual_dpo_local_only.json",
+            "--llamafactory-data-dir", llamafactory_data,
+            "--smoke-samples", "8",
+            "--check-image-files",
+        )
+        dataset_info = json.loads((llamafactory_data / "dataset_info.json").read_text())
+        self.assertIn("existing", dataset_info)
+        self.assertTrue(dataset_info["dataa_counterfactual_dpo_local_only"]["ranking"])
+        self.assertEqual(
+            dataset_info["dataa_counterfactual_dpo_local_only"]["columns"]["images"], "images"
+        )
+        smoke_data = json.loads(
+            (llamafactory_data / "dataa_counterfactual_dpo_local_only_smoke.json").read_text()
+        )
+        self.assertEqual(len(smoke_data), 8)
+        self.assertEqual(
+            {(row["pair_order"], row["preference_kind"]) for row in smoke_data},
+            {
+                ("real_first", "video_choice"),
+                ("real_first", "localization"),
+                ("fake_first", "video_choice"),
+                ("fake_first", "localization"),
+            },
+        )
+
         signal_dir = self.root / "signal"
         run_script(
             "tools/dataa_counterfactual_signal_gate.py",
