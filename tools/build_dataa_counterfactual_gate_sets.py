@@ -443,7 +443,15 @@ def main() -> None:
         pair = pairs[case_id]
         real_labels = clean_camera_labels(camera.get((case_id, "real"), []))
         fake_labels = clean_camera_labels(camera.get((case_id, "fake"), []))
-        if real_labels and fake_labels and real_labels != fake_labels:
+        if real_labels and fake_labels:
+            camera_label_status = (
+                "both_known_consistent" if real_labels == fake_labels else "both_known_mismatch"
+            )
+        elif real_labels or fake_labels:
+            camera_label_status = "one_sided"
+        else:
+            camera_label_status = "missing"
+        if camera_label_status == "both_known_mismatch":
             camera_mismatch.append(case_id)
         labels = real_labels or fake_labels
         index = grounded.get(case_id, {})
@@ -467,7 +475,10 @@ def main() -> None:
                 "fake": pair["fake"],
                 "camera_labels": labels,
                 "motion_bucket": camera_bucket(labels),
-                "camera_pair_consistent": bool(real_labels and fake_labels and real_labels == fake_labels),
+                "camera_label_status": camera_label_status,
+                "camera_pair_consistent": (
+                    real_labels == fake_labels if real_labels and fake_labels else None
+                ),
                 "artifact_type": pair["fake"]["artifact_type"],
                 "bbox_1000": [round(float(value), 3) for value in bbox],
                 "negative_bbox_1000": negative_bbox(bbox),
@@ -527,6 +538,7 @@ def main() -> None:
             "true_mask_cases": true_mask_cases,
             "fallback_bbox_cases": len(manifest) - true_mask_cases,
             "camera_pair_mismatches": len(camera_mismatch),
+            "camera_label_status": dict(Counter(row["camera_label_status"] for row in manifest)),
             "dpo_records_per_variant": len(dpo_local),
             "eval_records_per_variant": len(eval_local),
         },

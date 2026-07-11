@@ -14,7 +14,7 @@
 | 2026-07-09 | 不训练模型、直接追加相机描述的检测消融 | 未通过 | 给旧检测模型直接追加正确相机描述，是否无需训练即可提升检测 | 正确相机没有优于错误相机或无相机，直接提示注入失败 |
 | 2026-07-10 | 普通 DataB 续训与相机文本 DataB 续训 | 未通过 | 经过匹配提示格式训练后，模型是否真正利用正确相机描述改善检测 | 正确相机描述不优于错误描述，并低于不提供相机描述；当前文本条件注入路线未学会利用相机内容 |
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
-| 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 0 待执行 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 数据、信号、swap/定位和迁移验收代码已完成；先找回真实 VACE mask 并运行 200 对 Gate 0 |
+| 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 0 初验通过，随机复核待执行 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 200 对真实 mask 的局部信号明显通过；旧脚本把 9 个 camera 标签缺失 case 误算为冲突且按排序截取，修正后需固定 seed 随机复跑留档 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -318,7 +318,7 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 
 ### 验收标准
 
-- Gate 0：有效 pair 与真实 mask 覆盖均不低于 90%；camera pair 一致率不低于 98%；mask 内/外差异中位数比值不低于 2.0；mask 外平均绝对差异中位数不高于 0.03；至少 70% pair 的 mask 内差异更大。
+- Gate 0：有效 pair、真实 mask 覆盖与 camera 标签覆盖均不低于 90%；在有 camera 标签的 pair 中一致率不低于 98%；mask 内/外差异中位数比值不低于 2.0；mask 外平均绝对差异中位数不高于 0.03；至少 70% pair 的 mask 内差异更大。
 - Gate 1：选择准确率不低于 70%；swap consistency 不低于 85%；预测 A 比例在 45% 至 55%；mean bbox IoU 不低于 0.30；选择与 bbox 格式正确率均不低于 95%。
 - Pair 迁移：相对等步数 detection replay，DataA Balanced ACC 或 Fake F1 至少提高 3 点；VIF-Bench ACC/F1 各下降不超过 1 点；`minor-motion` 或 `complex-motion` 至少一个指标提高 1 点。
 - Camera 贡献：`camera+pair` 相对 `pair-only` 的 DataA Balanced ACC 或 Fake F1 再提高至少 1 点，同时满足 VIF 保留与移动相机分桶条件。
@@ -332,7 +332,33 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 
 ### 当前状态与下一步
 
-2026-07-11 已实现数据构建、motion-matched replay、Gate 0、Gate 1、Gate 2 和合成端到端测试。实现测试通过不等于方法通过。下一步只做：定位或重建 grounded-CoT input index，用 200 个 train pair 运行 Gate 0；结果返回前不启动 DPO/GRPO。
+#### 2026-07-11 Gate 0 首次 200 对结果
+
+结果来源：
+
+- 构建 summary：`D:/1codex/camera/cameramotion_videodetection/counterfactual_gate/counterfactual_gate/data/dataa_counterfactual_gate_sets_summary.json`。
+- Gate 0 原始 summary：`D:/1codex/camera/cameramotion_videodetection/counterfactual_gate/counterfactual_gate/gate0_200/dataa_counterfactual_signal_gate_summary.json`。
+- 逐 pair 明细：`D:/1codex/camera/cameramotion_videodetection/counterfactual_gate/counterfactual_gate/gate0_200/dataa_counterfactual_signal_gate_items.csv`。
+
+| 指标 | 结果 | 原验收线 |
+|---|---:|---:|
+| 完整 DataA pair | 1076 | - |
+| train / held-out test case | 755 / 321 | case 交集为 0 |
+| 真实 VACE mask 覆盖 | 1076/1076，100% | ≥90% |
+| 200 对有效计算率 | 100% | ≥90% |
+| 200 对 camera 标签覆盖率 | 191/200，95.5% | 修正后 ≥90% |
+| 有标签 pair 的 camera 一致率 | 191/191，100% | ≥98% |
+| mask 内平均绝对差异中位数 | 0.12118 | - |
+| mask 外平均绝对差异中位数 | 0.01101 | ≤0.03 |
+| mask 内/外差异比中位数 | 9.3429 | ≥2.0 |
+| mask 内/外差异比 P10 | 2.8330 | - |
+| mask 内差异高于 mask 外的 pair 比例 | 100% | ≥70% |
+
+这次实际测试的是：同一 DataA case 的 Real/Fake 在真实 `M_gen` 内是否发生显著变化，同时 mask 外是否基本保持一致。局部像素信号以较大余量通过，说明 DataA 可以用于同源局部反事实学习；它尚未证明模型能学会该信号，也没有证明 camera 能提升检测。
+
+结论标记：`结论不足`。局部信号本身通过，但首次脚本按排序截取前 200 对，并把 9 个 `camera_labels=[]`、`motion_bucket=unknown` 的 case 错误计入 camera 不一致。原始 summary 的 `status=failed` 保留；2026-07-11 更正为“camera 标签覆盖 95.5%，有标签 pair 一致率 100%”，原因是缺失标签不等于 Real/Fake 标签冲突。
+
+下一步只做低成本复核：拉取修正版后用 `--seed 20260711` 随机抽取 200 对重跑；通过后去掉 `--max-pairs` 跑完整 train Gate 0。两次均通过后再进入配对学习，不直接启动 GRPO。
 
 
 ## 记录维护说明

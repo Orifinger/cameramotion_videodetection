@@ -146,6 +146,32 @@ class CounterfactualGateIntegrationTests(unittest.TestCase):
         self.assertEqual(signal["status"], "passed")
         self.assertGreater(signal["overall"]["median_inside_outside_ratio"], 2.0)
 
+        manifest_path = out_dir / "dataa_counterfactual_pair_manifest.jsonl"
+        manifest = [json.loads(line) for line in manifest_path.read_text().splitlines()]
+        manifest[0]["camera_labels"] = []
+        manifest[0]["motion_bucket"] = "unknown"
+        manifest[0]["camera_label_status"] = "missing"
+        manifest[0]["camera_pair_consistent"] = None
+        missing_camera_manifest = self.root / "missing_camera_manifest.jsonl"
+        missing_camera_manifest.write_text(
+            "".join(json.dumps(row) + "\n" for row in manifest), encoding="utf-8"
+        )
+        missing_camera_dir = self.root / "missing_camera_signal"
+        run_script(
+            "tools/dataa_counterfactual_signal_gate.py",
+            "--pair-manifest-jsonl", missing_camera_manifest,
+            "--out-dir", missing_camera_dir,
+            "--workers", "1",
+            "--min-camera-label-coverage", "0.70",
+            "--fail-on-gate",
+        )
+        missing_camera = json.loads(
+            (missing_camera_dir / "dataa_counterfactual_signal_gate_summary.json").read_text()
+        )
+        self.assertEqual(missing_camera["status"], "passed")
+        self.assertEqual(missing_camera["overall"]["camera_label_coverage_rate"], 0.75)
+        self.assertEqual(missing_camera["overall"]["camera_pair_consistency_rate"], 1.0)
+
         gt_path = out_dir / "dataa_counterfactual_eval_local_only.json"
         gt = json.loads(gt_path.read_text())
         predictions = [

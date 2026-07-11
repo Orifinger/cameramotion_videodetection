@@ -120,6 +120,7 @@ python tools/dataa_counterfactual_signal_gate.py \
   --out-dir "${OUT}/gate0_200" \
   --split train \
   --max-pairs 200 \
+  --seed 20260711 \
   --workers 64 \
   --fail-on-gate
 ```
@@ -129,13 +130,16 @@ python tools/dataa_counterfactual_signal_gate.py \
 ```text
 有效 pair >= 90%
 真实 mask 覆盖 >= 90%
-camera pair 一致率 >= 98%
+camera 标签覆盖率 >= 90%
+有 camera 标签的 pair 一致率 >= 98%
 mask 内/外差异中位数比值 >= 2.0
 mask 外平均绝对差异中位数 <= 0.03
 至少 70% pair 的 mask 内差异高于 mask 外
 ```
 
 通过 200 对后去掉 `--max-pairs 200` 跑全量。若 Gate 0 不通过，不进入任何 DPO/GRPO。
+
+`unknown` 或缺失 camera 标签只降低标签覆盖率，不再被错误计为 Real/Fake camera 标签冲突。`--max-pairs` 使用固定 seed 随机抽样。
 
 ## 6. 构建局部/全生成 replay
 

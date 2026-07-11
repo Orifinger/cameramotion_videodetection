@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import math
+import random
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -148,13 +149,33 @@ def evaluate_pair(row: Mapping[str, Any], allow_bbox_fallback: bool) -> dict[str
         return {"case_id": case_id, "ok": False, "failure": "no_valid_masked_frames"}
     inside_mean = float(np.mean(inside_values))
     outside_mean = float(np.mean(outside_values))
+    camera_label_status = str(row.get("camera_label_status") or "")
+    if not camera_label_status:
+        if row.get("camera_labels"):
+            camera_label_status = (
+                "both_known_consistent"
+                if row.get("camera_pair_consistent") is True
+                else "unknown_nonempty_labels"
+            )
+        else:
+            camera_label_status = "missing"
+    camera_label_available = camera_label_status in {
+        "both_known_consistent",
+        "both_known_mismatch",
+        "unknown_nonempty_labels",
+    }
+    camera_pair_consistent = (
+        bool(row.get("camera_pair_consistent")) if camera_label_available else None
+    )
     return {
         "case_id": case_id,
         "dataset_split": row.get("dataset_split", ""),
         "motion_bucket": row.get("motion_bucket", "unknown"),
         "artifact_type": row.get("artifact_type", ""),
         "region_source": region_source,
-        "camera_pair_consistent": bool(row.get("camera_pair_consistent")),
+        "camera_label_status": camera_label_status,
+        "camera_label_available": camera_label_available,
+        "camera_pair_consistent": camera_pair_consistent,
         "ok": True,
         "failure": "",
         "num_valid_frames": valid_frames,
@@ -168,6 +189,7 @@ def evaluate_pair(row: Mapping[str, Any], allow_bbox_fallback: bool) -> dict[str
 
 def aggregate(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     valid = [item for item in items if item.get("ok")]
+    camera_labeled = [item for item in valid if item.get("camera_label_available")]
     ratios = [float(item["inside_outside_ratio"]) for item in valid]
     inside = [float(item["inside_mean_abs_diff"]) for item in valid]
     outside = [float(item["outside_mean_abs_diff"]) for item in valid]
@@ -179,8 +201,12 @@ def aggregate(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "true_mask_pair_rate": safe_div(
             sum(item.get("region_source") == "vace_mask" for item in valid), len(items)
         ),
+        "camera_label_coverage_rate": safe_div(len(camera_labeled), len(valid)),
+        "num_camera_labeled_pairs": len(camera_labeled),
+        "num_camera_unlabeled_pairs": len(valid) - len(camera_labeled),
         "camera_pair_consistency_rate": safe_div(
-            sum(bool(item.get("camera_pair_consistent")) for item in valid), len(valid)
+            sum(bool(item.get("camera_pair_consistent")) for item in camera_labeled),
+            len(camera_labeled),
         ),
         "median_inside_mean_abs_diff": median(inside) if inside else 0.0,
         "median_outside_mean_abs_diff": median(outside) if outside else 0.0,
@@ -197,7 +223,8 @@ def aggregate(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 def write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     fields = [
         "case_id", "dataset_split", "motion_bucket", "artifact_type", "region_source",
-        "camera_pair_consistent", "ok", "failure", "num_valid_frames",
+        "camera_label_status", "camera_label_available", "camera_pair_consistent",
+        "ok", "failure", "num_valid_frames",
         "inside_mean_abs_diff", "outside_mean_abs_diff", "inside_outside_ratio",
         "outside_near_identical_rate", "mean_mask_area_ratio",
     ]
@@ -215,11 +242,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--split", choices=["train", "test", "all"], default="all")
     parser.add_argument("--max-pairs", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=20260711)
     parser.add_argument("--workers", type=int, default=32)
     parser.add_argument("--allow-bbox-fallback", action="store_true")
     parser.add_argument("--min-valid-pair-rate", type=float, default=0.90)
     parser.add_argument("--min-true-mask-rate", type=float, default=0.90)
     parser.add_argument("--min-camera-consistency", type=float, default=0.98)
+    parser.add_argument("--min-camera-label-coverage", type=float, default=0.90)
     parser.add_argument("--min-median-ratio", type=float, default=2.0)
     parser.add_argument("--max-median-outside-diff", type=float, default=0.03)
     parser.add_argument("--min-inside-gt-outside-rate", type=float, default=0.70)
@@ -233,7 +262,7 @@ def main() -> None:
     if args.split != "all":
         rows = [row for row in rows if row.get("dataset_split") == args.split]
     if args.max_pairs > 0:
-        rows = rows[: args.max_pairs]
+        rows = random.Random(args.seed).sample(rows, min(args.max_pairs, len(rows)))
     if not rows:
         raise ValueError("no pair records selected")
 
@@ -248,6 +277,9 @@ def main() -> None:
     checks = {
         "valid_pair_rate": overall["valid_pair_rate"] >= args.min_valid_pair_rate,
         "true_mask_pair_rate": overall["true_mask_pair_rate"] >= args.min_true_mask_rate,
+        "camera_label_coverage_rate": (
+            overall["camera_label_coverage_rate"] >= args.min_camera_label_coverage
+        ),
         "camera_pair_consistency_rate": overall["camera_pair_consistency_rate"] >= args.min_camera_consistency,
         "median_inside_outside_ratio": overall["median_inside_outside_ratio"] >= args.min_median_ratio,
         "median_outside_mean_abs_diff": overall["median_outside_mean_abs_diff"] <= args.max_median_outside_diff,
@@ -264,6 +296,7 @@ def main() -> None:
             "min_valid_pair_rate": args.min_valid_pair_rate,
             "min_true_mask_rate": args.min_true_mask_rate,
             "min_camera_consistency": args.min_camera_consistency,
+            "min_camera_label_coverage": args.min_camera_label_coverage,
             "min_median_ratio": args.min_median_ratio,
             "max_median_outside_diff": args.max_median_outside_diff,
             "min_inside_gt_outside_rate": args.min_inside_gt_outside_rate,
