@@ -14,7 +14,7 @@
 | 2026-07-09 | 不训练模型、直接追加相机描述的检测消融 | 未通过 | 给旧检测模型直接追加正确相机描述，是否无需训练即可提升检测 | 正确相机没有优于错误相机或无相机，直接提示注入失败 |
 | 2026-07-10 | 普通 DataB 续训与相机文本 DataB 续训 | 未通过 | 经过匹配提示格式训练后，模型是否真正利用正确相机描述改善检测 | 正确相机描述不优于错误描述，并低于不提供相机描述；当前文本条件注入路线未学会利用相机内容 |
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
-| 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 0 初验通过，随机复核待执行 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 200 对真实 mask 的局部信号明显通过；旧脚本把 9 个 camera 标签缺失 case 误算为冲突且按排序截取，修正后需固定 seed 随机复跑留档 |
+| 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 0 通过，Gate 1 待执行 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 固定 seed 随机 200 对与完整 755 个 train pair 均正式通过；DataA 具备稳定的真实 mask 局部反事实信号，下一步验证模型能否学会 A/B 选择与定位 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -359,6 +359,31 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 结论标记：`结论不足`。局部信号本身通过，但首次脚本按排序截取前 200 对，并把 9 个 `camera_labels=[]`、`motion_bucket=unknown` 的 case 错误计入 camera 不一致。原始 summary 的 `status=failed` 保留；2026-07-11 更正为“camera 标签覆盖 95.5%，有标签 pair 一致率 100%”，原因是缺失标签不等于 Real/Fake 标签冲突。
 
 下一步只做低成本复核：拉取修正版后用 `--seed 20260711` 随机抽取 200 对重跑；通过后去掉 `--max-pairs` 跑完整 train Gate 0。两次均通过后再进入配对学习，不直接启动 GRPO。
+
+#### 2026-07-11 Gate 0 随机与全量复核结果
+
+结果来源：
+
+- 随机 200 对 summary：`/tmp/1res/counterfactual_gate/gate0_200_random/dataa_counterfactual_signal_gate_summary.json`。
+- 随机 200 对明细：`/tmp/1res/counterfactual_gate/gate0_200_random/dataa_counterfactual_signal_gate_items.csv`。
+- 完整 train summary：`/tmp/1res/counterfactual_gate/gate0_train_full/dataa_counterfactual_signal_gate_summary.json`。
+- 完整 train 明细：`/tmp/1res/counterfactual_gate/gate0_train_full/dataa_counterfactual_signal_gate_items.csv`。
+
+| 指标 | 固定 seed 随机 200 对 | 完整 train 755 对 | 验收线 |
+|---|---:|---:|---:|
+| 有效 pair 率 | 100% | 100% | ≥90% |
+| 真实 VACE mask 覆盖率 | 100% | 100% | ≥90% |
+| camera 标签覆盖率 | 99.5% | 98.81% | ≥90% |
+| 有标签 pair 的 camera 一致率 | 100% | 100% | ≥98% |
+| mask 内平均绝对差异中位数 | 0.12281 | 0.12467 | - |
+| mask 外平均绝对差异中位数 | 0.01212 | 0.01270 | ≤0.03 |
+| mask 内/外差异比中位数 | 8.5753 | 8.3310 | ≥2.0 |
+| mask 内/外差异比 P10 | 2.4153 | 2.3811 | - |
+| mask 内差异高于 mask 外的 pair 比例 | 100% | 99.87% | ≥70% |
+
+两次复核的核心指标接近，说明首次结果不是排序抽样偶然性。完整训练集只有 1/755 个 pair 的 mask 内差异未高于 mask 外，且总体中位数比值仍为 8.33；局部反事实信号稳定存在。
+
+结论标记：`通过`。Gate 0 只建立“DataA 中存在可学习的、真实 mask 对齐的局部差异”，不建立“MLLM 已能利用该差异”或“camera 已能提高检测”。下一步进入 Gate 1 的最小配对学习，对 held-out 321 个 case 做 A/B 双顺序选择、swap consistency 与 bbox IoU 验收；暂不直接运行 GRPO。
 
 
 ## 记录维护说明
