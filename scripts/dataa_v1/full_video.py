@@ -127,7 +127,7 @@ def repair_one_frame_full_pair_mismatch(
     ffprobe_bin: str,
     execute: bool = True,
 ) -> Dict[str, Any]:
-    """Trim the longer full-video pair member when ffmpeg rounding leaves a 1-frame skew."""
+    """Trim the longer full-video pair member when ffmpeg rounding leaves a small end skew."""
 
     real_meta = ffprobe_video(full_real, ffprobe_bin=ffprobe_bin)
     fake_meta = ffprobe_video(full_fake, ffprobe_bin=ffprobe_bin)
@@ -150,10 +150,11 @@ def repair_one_frame_full_pair_mismatch(
             "full_fake": _shape(fake_meta),
         }
     diff = real_meta.frame_count - fake_meta.frame_count
-    if abs(diff) != 1:
+    frame_skew = abs(diff)
+    if frame_skew not in {1, 2}:
         return {
             "status": "not_repairable",
-            "reason": f"frame_count_diff_not_one:{diff}",
+            "reason": f"frame_count_diff_exceeds_two:{diff}",
             "full_real": _shape(real_meta),
             "full_fake": _shape(fake_meta),
         }
@@ -164,11 +165,11 @@ def repair_one_frame_full_pair_mismatch(
     if not execute:
         return {
             "status": "would_repair",
-            "action": f"trim_{trim_label}_last_frame",
+            "action": f"trim_{trim_label}_last_{frame_skew}_frames",
             "target_frame_count": target_count,
             "before": {"full_real": _shape(real_meta), "full_fake": _shape(fake_meta)},
         }
-    tmp_path = trim_path.with_name(f".{trim_path.stem}.trimmed_one_frame.{trim_path.suffix.lstrip('.')}")
+    tmp_path = trim_path.with_name(f".{trim_path.stem}.trimmed_end_skew.{trim_path.suffix.lstrip('.')}")
     try:
         crop_video_frames(
             source_video=trim_path,
@@ -189,7 +190,7 @@ def repair_one_frame_full_pair_mismatch(
     _assert_full_pair(repaired_real, repaired_fake)
     return {
         "status": "repaired",
-        "action": f"trimmed_{trim_label}_last_frame",
+        "action": f"trimmed_{trim_label}_last_{frame_skew}_frames",
         "target_frame_count": target_count,
         "before": {"full_real": _shape(real_meta), "full_fake": _shape(fake_meta)},
         "after": {"full_real": _shape(repaired_real), "full_fake": _shape(repaired_fake)},

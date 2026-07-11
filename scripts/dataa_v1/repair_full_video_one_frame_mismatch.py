@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repair existing full_real/full_fake pairs with a one-frame reassembly mismatch."""
+"""Repair existing full_real/full_fake pairs with a bounded reassembly end skew."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def _patch_manifest(attempt_dir: Path, repair: Mapping[str, Any], *, ffprobe_bin
         or real_meta.width != fake_meta.width
     ):
         raise DataAError(
-            "repair verification failed after one-frame trim: "
+            "repair verification failed after bounded end trim: "
             f"full_real={{'fps': {real_meta.fps}, 'frame_count': {real_meta.frame_count}, 'height': {real_meta.height}, 'width': {real_meta.width}}} "
             f"full_fake={{'fps': {fake_meta.fps}, 'frame_count': {fake_meta.frame_count}, 'height': {fake_meta.height}, 'width': {fake_meta.width}}}"
         )
@@ -87,7 +87,7 @@ def _patch_manifest(attempt_dir: Path, repair: Mapping[str, Any], *, ffprobe_bin
     manifest["full_video"] = full_video
     manifest.setdefault("postprocess_repairs", []).append(
         {
-            "type": "one_frame_full_video_pair_alignment",
+            "type": "bounded_full_video_pair_alignment",
             "repair": dict(repair),
             "repaired_at_utc": full_video["repaired_at_utc"],
         }
@@ -138,6 +138,9 @@ def repair_run(
             counts[f"not_repairable:{repair.get('reason')}"] += 1
             if len(examples) < 10:
                 examples.append({"case_id": case_id, "repair": repair})
+            continue
+        if status == "already_aligned":
+            counts[status] += 1
             continue
         if execute:
             manifest = _patch_manifest(attempt_dir, repair, ffprobe_bin=ffprobe_bin)
