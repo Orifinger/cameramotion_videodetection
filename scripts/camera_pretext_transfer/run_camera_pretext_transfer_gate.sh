@@ -45,15 +45,22 @@ require_dir() {
 }
 
 build_data() {
-  local check_args=()
-  if [[ "${CHECK_IMAGES}" == "1" ]]; then check_args+=(--check-images); fi
-  "${PYTHON_BIN}" tools/build_camera_pretext_transfer_gate.py \
-    --dataa-detection-json "${DATAA_DETECTION_JSON}" \
-    --dataa-camera-jsonl "${DATAA_CAMERA_JSONL}" \
-    --dataa-dev-json "${DATAA_DEV_JSON}" \
-    --out-dir "${DATA_DIR}" \
-    --seed 20260712 \
-    "${check_args[@]}"
+  if [[ "${CHECK_IMAGES}" == "1" ]]; then
+    "${PYTHON_BIN}" tools/build_camera_pretext_transfer_gate.py \
+      --dataa-detection-json "${DATAA_DETECTION_JSON}" \
+      --dataa-camera-jsonl "${DATAA_CAMERA_JSONL}" \
+      --dataa-dev-json "${DATAA_DEV_JSON}" \
+      --out-dir "${DATA_DIR}" \
+      --seed 20260712 \
+      --check-images
+  else
+    "${PYTHON_BIN}" tools/build_camera_pretext_transfer_gate.py \
+      --dataa-detection-json "${DATAA_DETECTION_JSON}" \
+      --dataa-camera-jsonl "${DATAA_CAMERA_JSONL}" \
+      --dataa-dev-json "${DATAA_DEV_JSON}" \
+      --out-dir "${DATA_DIR}" \
+      --seed 20260712
+  fi
 }
 
 train_camera() {
@@ -81,22 +88,31 @@ infer_camera() {
   local adapter="$2"
   local eval_jsonl="$3"
   local output_dir="${CAMERA_PRED_ROOT}/${name}"
-  local adapter_args=()
   require_file "${eval_jsonl}"
   if [[ -n "${adapter}" ]]; then
     require_dir "${adapter}"
-    adapter_args+=(--adapter-path "${adapter}")
   fi
   rm -rf "${output_dir}"
-  torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
-    -m scripts.camera_pretext_transfer.infer_camera \
-    --model-path "${MODEL_PATH}" \
-    "${adapter_args[@]}" \
-    --eval-jsonl "${eval_jsonl}" \
-    --output-dir "${output_dir}" \
-    --model-name "${name}" \
-    --max-pixels "${MAX_PIXELS}" \
-    --seed 20260712
+  if [[ -n "${adapter}" ]]; then
+    torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
+      -m scripts.camera_pretext_transfer.infer_camera \
+      --model-path "${MODEL_PATH}" \
+      --adapter-path "${adapter}" \
+      --eval-jsonl "${eval_jsonl}" \
+      --output-dir "${output_dir}" \
+      --model-name "${name}" \
+      --max-pixels "${MAX_PIXELS}" \
+      --seed 20260712
+  else
+    torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
+      -m scripts.camera_pretext_transfer.infer_camera \
+      --model-path "${MODEL_PATH}" \
+      --eval-jsonl "${eval_jsonl}" \
+      --output-dir "${output_dir}" \
+      --model-name "${name}" \
+      --max-pixels "${MAX_PIXELS}" \
+      --seed 20260712
+  fi
 }
 
 eval_camera_one() {
