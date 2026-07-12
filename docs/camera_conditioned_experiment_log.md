@@ -16,7 +16,7 @@
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
-| 2026-07-12 | 相机分层同源配对独立判别最小验证 | 数据构建与单卡 smoke 通过，正式训练待执行 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | 工程链路正常；发现旧 train JSON 漏 13 个新 case，已改为完整 1080 减固定 321 dev 后重新构建 |
+| 2026-07-12 | 相机分层同源配对独立判别最小验证 | 未通过，当前配对排序配方停止 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | Pair margin 被优化但 AUC 仅增 0.46 点、pair accuracy 仅增 1.56 点、复杂运动 AUC 仅增 0.27 点，bootstrap 跨 0；不进入 VIF 与 camera pretext |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -709,7 +709,7 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 ### 状态与日期
 
 - 日期：2026-07-12。
-- 状态：`数据构建与单卡 smoke 通过，正式训练待执行`。
+- 状态：`未通过，当前配对排序配方停止`。
 - 完整执行说明：`docs/caspr_gate1_execution_20260712.md`。
 
 ### 模型与数据
@@ -767,6 +767,26 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 Smoke 的 DataA pair step 为 loss 1.4200、binary loss 1.2252、pair loss 0.9741、梯度范数 16.72；DataB replay step 为 loss 0.00861、梯度范数 0.429。该结果只建立工程链路可训练，不建立检测收益。首次构建读取旧 `dataA_train.json` 后只有 746 个 eligible train pairs；与最终 1080 减固定 321 dev 应有 759 train 不一致。
 
 2026-07-12 更正：正式训练默认不再读取旧 `dataA_train.json`，统一用 1080 个完整 pair 减去固定 321 dev 得到 759 train，再按来源与 motion bucket 选择 256 pairs。更正原因是旧 train JSON 未覆盖 13 个新 40step_v3 case；首次 smoke 不作为训练结果，无需保留其旧抽样，重新运行 `STAGE=build` 即可。
+
+### 2026-07-12 正式 64 步对照结果
+
+结果来源：`/tmp/1res/caspr_gate1/eval/caspr_gate1_dataa_summary.json`。控制组与方法组均完整覆盖 321 个开发 pairs、642 个独立视频。
+
+| 指标 | 初始 detection checkpoint | 普通独立判别续训对照 | 同源配对排序方法 | 方法减对照 | 验收线 |
+|---|---:|---:|---:|---:|---:|
+| 整体视频 AUC | 59.49% | 60.46% | 60.92% | +0.46 点 | 至少 +3 点 |
+| Balanced accuracy@0 | 51.87% | 58.26% | 57.48% | -0.78 点 | - |
+| Real recall@0 | 98.13% | 63.24% | 61.99% | -1.25 点 | - |
+| Fake recall@0 | 5.61% | 53.27% | 52.96% | -0.31 点 | - |
+| Pair accuracy | 64.17% | 60.75% | 62.31% | +1.56 点 | 至少 +5 点 |
+| 平均 Fake-Real margin | 0.743 | 0.269 | 0.336 | +0.067 | - |
+| Complex-motion AUC | 待补充 | 60.53% | 60.80% | +0.27 点 | 至少 +3 点 |
+
+三个视频来源的 AUC 差值均为很小的正值：dataset 40-step `+0.54` 点、textedit 40-step `+0.25` 点、VACE-14B `+0.94` 点，因此“任一来源下降不超过 2 点”是唯一通过的方法效果检查。整体 AUC 差值的 1000 次 case bootstrap 均值为 `+0.45` 点，95% CI 为 `[-0.11, +1.05]` 点，跨越 0。
+
+这次实际测试的是：在相同初始 checkpoint、相同 256 个 DataA train pairs、512 条 DataB replay、verdict prompt、LoRA 容量和 64 optimizer steps 下，额外的同源 Fake-vs-Real score margin 是否带来检测增益。方法组平均 pair margin 高于普通对照，说明 pair loss 已经作用于模型；但整体、配对和复杂运动三项增益均远低于验收线，且 pair accuracy 仍低于初始 checkpoint，不能解释为训练不足或损失未生效。
+
+结论标记：`未通过`。当前权重 0.2、margin 0.5 的独立 verdict 配对排序配方正式停止，不追加 loss 权重、margin、epoch 或 LoRA rank 试参。由于第一道 DataA 门失败，不合并模型、不运行 VIF-Bench 保留测试，也不据此启动 camera pretext、DPO 或 GRPO。该结果不否定 camera motion 可能与检测有关，只否定“依靠当前短 verdict 同源排序把 camera 分层监督接入检测”是一个值得在当前期限继续扩展的机制。
 
 ## 记录维护说明
 
