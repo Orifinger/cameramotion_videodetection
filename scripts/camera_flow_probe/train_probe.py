@@ -380,6 +380,59 @@ def _bootstrap_auc_delta(
     }
 
 
+def _fit_score_fusion(
+    global_predictions: Sequence[Mapping[str, Any]],
+    local_predictions: Sequence[Mapping[str, Any]],
+) -> dict[str, float]:
+    global_map = {(str(item["case_id"]), str(item["role"])): item for item in global_predictions}
+    local_map = {(str(item["case_id"]), str(item["role"])): item for item in local_predictions}
+    keys = sorted(set(global_map) & set(local_map))
+    labels = np.asarray([global_map[key]["label"] for key in keys], dtype=np.int64)
+    global_scores = np.asarray([global_map[key]["score"] for key in keys], dtype=np.float64)
+    local_scores = np.asarray([local_map[key]["score"] for key in keys], dtype=np.float64)
+    global_mean, global_std = float(global_scores.mean()), float(global_scores.std())
+    local_mean, local_std = float(local_scores.mean()), float(local_scores.std())
+    global_std = max(global_std, 1e-8)
+    local_std = max(local_std, 1e-8)
+    global_z = (global_scores - global_mean) / global_std
+    local_z = (local_scores - local_mean) / local_std
+    best_alpha = 0.0
+    best_auc = float("-inf")
+    for alpha in np.linspace(0.0, 2.0, 201):
+        auc = roc_auc(labels, global_z + float(alpha) * local_z)
+        if auc > best_auc + 1e-12:
+            best_auc = float(auc)
+            best_alpha = float(alpha)
+    fused = global_z + best_alpha * local_z
+    return {
+        "alpha": best_alpha,
+        "validation_auc": best_auc,
+        "threshold": float(best_balanced_threshold(labels, fused)),
+        "global_mean": global_mean,
+        "global_std": global_std,
+        "local_mean": local_mean,
+        "local_std": local_std,
+    }
+
+
+def _apply_score_fusion(
+    global_predictions: Sequence[Mapping[str, Any]],
+    local_predictions: Sequence[Mapping[str, Any]],
+    parameters: Mapping[str, float],
+) -> list[dict[str, Any]]:
+    local_map = {(str(item["case_id"]), str(item["role"])): item for item in local_predictions}
+    output: list[dict[str, Any]] = []
+    for global_item in global_predictions:
+        key = (str(global_item["case_id"]), str(global_item["role"]))
+        local_item = local_map[key]
+        global_z = (float(global_item["score"]) - float(parameters["global_mean"])) / float(parameters["global_std"])
+        local_z = (float(local_item["score"]) - float(parameters["local_mean"])) / float(parameters["local_std"])
+        item = dict(global_item)
+        item["score"] = global_z + float(parameters["alpha"]) * local_z
+        output.append(item)
+    return output
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest-jsonl", type=Path, required=True)
@@ -438,6 +491,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     val_thresholds: dict[str, float] = {}
     patch_thresholds: dict[str, float] = {}
     predictions: dict[str, list[dict[str, Any]]] = {}
+    validation_predictions: dict[str, list[dict[str, Any]]] = {}
     localization: dict[str, dict[str, float]] = {}
 
     global_probe = train_probe_model(
@@ -488,6 +542,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             np.asarray([item["label"] for item in val_predictions]),
             np.asarray([item["score"] for item in val_predictions]),
         )
+        validation_predictions[variant] = val_predictions
         predictions[variant] = _video_predictions(
             common_test_rows,
             loaded,
@@ -522,6 +577,58 @@ def main(argv: Sequence[str] | None = None) -> int:
         variant: _metric_groups(full_test_predictions[variant], val_thresholds[variant])
         for variant in VARIANTS
     }
+    fusion_parameters: dict[str, dict[str, float]] = {}
+    fusion_predictions: dict[str, list[dict[str, Any]]] = {}
+    full_fusion_predictions: dict[str, list[dict[str, Any]]] = {}
+    fusion_metrics: dict[str, Any] = {}
+    full_fusion_sensitivity_metrics: dict[str, Any] = {}
+    for suffix, local_variant in (("unaligned", "local_unaligned"), ("aligned", "local_aligned")):
+        name = f"global_plus_{suffix}"
+        parameters = _fit_score_fusion(validation_predictions["global"], validation_predictions[local_variant])
+        fusion_parameters[name] = parameters
+        fusion_predictions[name] = _apply_score_fusion(predictions["global"], predictions[local_variant], parameters)
+        full_fusion_predictions[name] = _apply_score_fusion(
+            full_test_predictions["global"], full_test_predictions[local_variant], parameters
+        )
+        fusion_metrics[name] = _metric_groups(fusion_predictions[name], parameters["threshold"])
+        full_fusion_sensitivity_metrics[name] = _metric_groups(
+            full_fusion_predictions[name], parameters["threshold"]
+        )
+    fused_aligned_auc = fusion_metrics["global_plus_aligned"]["overall"]["auc"]
+    fused_unaligned_auc = fusion_metrics["global_plus_unaligned"]["overall"]["auc"]
+    fused_global_auc = metrics["global"]["overall"]["auc"]
+    fused_aligned_complex = fusion_metrics["global_plus_aligned"].get("motion:complex-motion", {}).get(
+        "auc", float("nan")
+    )
+    fused_unaligned_complex = fusion_metrics["global_plus_unaligned"].get("motion:complex-motion", {}).get(
+        "auc", float("nan")
+    )
+    fusion_bootstrap_vs_unaligned = _bootstrap_auc_delta(
+        fusion_predictions["global_plus_aligned"],
+        fusion_predictions["global_plus_unaligned"],
+        iterations=args.bootstrap_iterations,
+        seed=args.seed + 1,
+    )
+    fusion_bootstrap_vs_global = _bootstrap_auc_delta(
+        fusion_predictions["global_plus_aligned"],
+        predictions["global"],
+        iterations=args.bootstrap_iterations,
+        seed=args.seed + 2,
+    )
+    fusion_checks = {
+        "aligned_fusion_beats_unaligned_by_1_point": fused_aligned_auc - fused_unaligned_auc >= 0.01,
+        "aligned_fusion_beats_global_by_1_point": fused_aligned_auc - fused_global_auc >= 0.01,
+        "aligned_fusion_complex_beats_unaligned_by_1_point": (
+            bool(
+                np.isfinite(fused_aligned_complex)
+                and np.isfinite(fused_unaligned_complex)
+                and fused_aligned_complex - fused_unaligned_complex >= 0.01
+            )
+        ),
+        "bootstrap_vs_unaligned_positive": fusion_bootstrap_vs_unaligned["ci95_low"] > 0.0,
+        "bootstrap_vs_global_positive": fusion_bootstrap_vs_global["ci95_low"] > 0.0,
+    }
+    fusion_status = "passed" if all(fusion_checks.values()) else "failed"
     aligned_auc = metrics["local_aligned"]["overall"]["auc"]
     unaligned_auc = metrics["local_unaligned"]["overall"]["auc"]
     aligned_complex = metrics["local_aligned"].get("motion:complex-motion", {}).get("auc", float("nan"))
@@ -586,6 +693,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         "patch_thresholds": patch_thresholds,
         "metrics": metrics,
         "full_test_sensitivity_metrics": full_test_sensitivity_metrics,
+        "fusion_gate": {
+            "status": fusion_status,
+            "parameters": fusion_parameters,
+            "primary_metrics": fusion_metrics,
+            "full_test_sensitivity_metrics": full_fusion_sensitivity_metrics,
+            "aligned_minus_unaligned": {
+                "overall_auc": fused_aligned_auc - fused_unaligned_auc,
+                "complex_motion_auc": fused_aligned_complex - fused_unaligned_complex,
+                "bootstrap_auc_delta": fusion_bootstrap_vs_unaligned,
+            },
+            "aligned_minus_global": {
+                "overall_auc": fused_aligned_auc - fused_global_auc,
+                "bootstrap_auc_delta": fusion_bootstrap_vs_global,
+            },
+            "checks": fusion_checks,
+        },
         "localization": localization,
         "aligned_minus_unaligned": {
             "overall_auc": aligned_auc - unaligned_auc,

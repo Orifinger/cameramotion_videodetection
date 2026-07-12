@@ -40,6 +40,7 @@ try:
     )
     from scripts.camera_flow_probe.train_probe import main as train_probe_main
     from scripts.camera_flow_probe.train_probe import _common_local_supervision_rows
+    from scripts.camera_flow_probe.train_probe import _apply_score_fusion, _fit_score_fusion
 except ModuleNotFoundError:
     torch = None
 
@@ -288,6 +289,18 @@ class CameraMetricTests(unittest.TestCase):
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
 class CameraProbeTrainingTests(unittest.TestCase):
+    def test_score_fusion_uses_validation_only_parameters(self) -> None:
+        global_predictions = []
+        local_predictions = []
+        for index, label in enumerate((0, 0, 1, 1)):
+            common = {"case_id": str(index), "role": "fake", "label": label}
+            global_predictions.append({**common, "score": float(index)})
+            local_predictions.append({**common, "score": float(index)})
+        parameters = _fit_score_fusion(global_predictions, local_predictions)
+        fused = _apply_score_fusion(global_predictions, local_predictions, parameters)
+        self.assertGreaterEqual(parameters["alpha"], 0.0)
+        self.assertEqual(len(fused), 4)
+
     def test_common_local_supervision_requires_both_variants(self) -> None:
         rows = [{"case_id": "good"}, {"case_id": "aligned_missing"}]
         loaded = {}
@@ -370,6 +383,7 @@ class CameraProbeTrainingTests(unittest.TestCase):
             self.assertEqual(summary["num_test_cases"], 4)
             self.assertEqual(summary["local_supervision"]["num_common_primary_test_cases"], 4)
             self.assertEqual(summary["full_test_sensitivity_metrics"]["local_aligned"]["overall"]["num_samples"], 8)
+            self.assertIn(summary["fusion_gate"]["status"], {"passed", "failed"})
             self.assertIn(summary["status"], {"passed", "failed", "inconclusive"})
 
 
