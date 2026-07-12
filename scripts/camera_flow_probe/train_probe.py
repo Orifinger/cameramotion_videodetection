@@ -159,14 +159,12 @@ def _aggregate_top(scores: np.ndarray, fraction: float) -> float:
 
 def _build_global_training(
     rows: Sequence[Mapping[str, Any]],
-    feature_dir: Path,
-) -> tuple[dict[str, tuple[np.ndarray, np.ndarray]], dict[str, dict[str, np.ndarray]]]:
+    loaded: Mapping[str, dict[str, np.ndarray]],
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     partitions: dict[str, list[tuple[np.ndarray, int]]] = defaultdict(list)
-    loaded: dict[str, dict[str, np.ndarray]] = {}
     for row in rows:
         case_id = str(row["case_id"])
-        values = _load_feature(feature_dir / f"{case_id}.npz")
-        loaded[case_id] = values
+        values = loaded[case_id]
         partition = "val" if _stable_unit(case_id, 20260712) < 0.15 else "train"
         for role, label in (("real", 0), ("fake", 1)):
             for feature in values[f"{role}_global"]:
@@ -178,7 +176,7 @@ def _build_global_training(
             np.stack([item[0] for item in items]),
             np.asarray([item[1] for item in items], dtype=np.int64),
         )
-    return arrays, loaded
+    return arrays
 
 
 def _build_local_training(
@@ -212,6 +210,39 @@ def _build_local_training(
             raise ValueError(f"no local {partition} patches for {variant}")
         output[partition] = (np.concatenate([item[0] for item in values]), np.concatenate([item[1] for item in values]))
     return output
+
+
+def _has_effective_positive(values: Mapping[str, np.ndarray], suffix: str) -> bool:
+    labels = values[f"fake_label_{suffix}"].reshape(-1).astype(bool)
+    valid = values[f"fake_valid_{suffix}"].reshape(-1).astype(bool)
+    return bool((labels & valid).any())
+
+
+def _common_local_supervision_rows(
+    rows: Sequence[Mapping[str, Any]],
+    loaded: Mapping[str, dict[str, np.ndarray]],
+) -> tuple[list[Mapping[str, Any]], list[dict[str, Any]]]:
+    eligible: list[Mapping[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for row in rows:
+        case_id = str(row["case_id"])
+        values = loaded[case_id]
+        aligned = _has_effective_positive(values, "aligned")
+        unaligned = _has_effective_positive(values, "unaligned")
+        if aligned and unaligned:
+            eligible.append(row)
+        else:
+            excluded.append(
+                {
+                    "case_id": case_id,
+                    "dataset_split": row.get("dataset_split"),
+                    "motion_bucket": row.get("motion_bucket"),
+                    "source_name": row.get("source_name"),
+                    "aligned_effective_positive": aligned,
+                    "unaligned_effective_positive": unaligned,
+                }
+            )
+    return eligible, excluded
 
 
 def _video_predictions(
@@ -387,9 +418,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not train_rows or not test_rows:
         print("both train and test feature sets are required", file=sys.stderr)
         return 2
-    global_sets, loaded = _build_global_training(train_rows, args.feature_dir)
-    for row in test_rows:
-        loaded[str(row["case_id"])] = _load_feature(args.feature_dir / f"{row['case_id']}.npz")
+    loaded = {
+        str(row["case_id"]): _load_feature(args.feature_dir / f"{row['case_id']}.npz")
+        for row in (*train_rows, *test_rows)
+    }
+    local_train_rows, local_train_excluded = _common_local_supervision_rows(train_rows, loaded)
+    common_test_rows, common_test_excluded = _common_local_supervision_rows(test_rows, loaded)
+    if not local_train_rows or not common_test_rows:
+        print("no common aligned/unaligned local supervision rows", file=sys.stderr)
+        return 2
+    global_sets = _build_global_training(local_train_rows, loaded)
 
     try:
         hidden_dims = tuple(int(value.strip()) for value in args.hidden_dims.split(",") if value.strip())
@@ -416,7 +454,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     for variant in ("local_unaligned", "local_aligned"):
         local_sets = _build_local_training(
-            train_rows,
+            local_train_rows,
             loaded,
             variant=variant,
             max_patches_per_group=args.max_patches_per_group,
@@ -435,10 +473,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         val_scores = probes[variant].predict(local_sets["val"][0], device=device)
         patch_thresholds[variant] = best_f1_threshold(local_sets["val"][1], val_scores)
 
-    val_rows = [row for row in train_rows if _stable_unit(str(row["case_id"]), 20260712) < 0.15]
+    common_val_rows = [row for row in local_train_rows if _stable_unit(str(row["case_id"]), 20260712) < 0.15]
+    full_test_predictions: dict[str, list[dict[str, Any]]] = {}
     for variant in VARIANTS:
         val_predictions = _video_predictions(
-            val_rows,
+            common_val_rows,
             loaded,
             variant=variant,
             probe=probes[variant],
@@ -450,6 +489,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             np.asarray([item["score"] for item in val_predictions]),
         )
         predictions[variant] = _video_predictions(
+            common_test_rows,
+            loaded,
+            variant=variant,
+            probe=probes[variant],
+            device=device,
+            local_top_fraction=args.local_top_fraction,
+        )
+        full_test_predictions[variant] = _video_predictions(
             test_rows,
             loaded,
             variant=variant,
@@ -459,7 +506,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if variant != "global":
             localization[variant] = _localization_metrics(
-                test_rows,
+                common_test_rows,
                 loaded,
                 variant=variant,
                 probe=probes[variant],
@@ -469,6 +516,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     metrics = {
         variant: _metric_groups(predictions[variant], val_thresholds[variant])
+        for variant in VARIANTS
+    }
+    full_test_sensitivity_metrics = {
+        variant: _metric_groups(full_test_predictions[variant], val_thresholds[variant])
         for variant in VARIANTS
     }
     aligned_auc = metrics["local_aligned"]["overall"]["auc"]
@@ -485,6 +536,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     checks = {
         "feature_coverage": coverage >= args.min_feature_coverage,
+        "common_local_train_coverage": len(local_train_rows) / len(train_rows) >= 0.95,
+        "common_test_coverage": len(common_test_rows) / len(test_rows) >= 0.95,
         "overall_auc_gain_at_least_3_points": aligned_auc - unaligned_auc >= 0.03,
         "complex_motion_auc_gain_positive": (
             bool(np.isfinite(aligned_complex) and np.isfinite(unaligned_complex) and aligned_complex - unaligned_complex >= 0.03)
@@ -514,9 +567,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         "num_feature_cases": len(available),
         "num_train_cases": len(train_rows),
         "num_test_cases": len(test_rows),
+        "local_supervision": {
+            "num_common_train_cases": len(local_train_rows),
+            "num_excluded_train_cases": len(local_train_excluded),
+            "excluded_train_cases": local_train_excluded,
+            "num_full_test_cases": len(test_rows),
+            "num_common_primary_test_cases": len(common_test_rows),
+            "common_primary_test_coverage": len(common_test_rows) / len(test_rows),
+            "num_excluded_primary_test_cases": len(common_test_excluded),
+            "excluded_primary_test_cases": common_test_excluded,
+        },
+        "evaluation_protocol": {
+            "primary_train_scope": "common effective local supervision cases for all three probes",
+            "primary_test_scope": "common effective local supervision cases for all video and localization metrics",
+            "full_test_scope": "all held-out cases, reported as sensitivity only",
+        },
         "validation_thresholds": val_thresholds,
         "patch_thresholds": patch_thresholds,
         "metrics": metrics,
+        "full_test_sensitivity_metrics": full_test_sensitivity_metrics,
         "localization": localization,
         "aligned_minus_unaligned": {
             "overall_auc": aligned_auc - unaligned_auc,
@@ -538,6 +607,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         writer.writeheader()
         for variant in VARIANTS:
             for item in predictions[variant]:
+                writer.writerow({"variant": variant, **item})
+    with (args.output_dir / "camera_aligned_local_probe_full_test_predictions.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        fieldnames = ["variant", "case_id", "role", "label", "score", "motion_bucket", "source_name", "vace_model"]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for variant in VARIANTS:
+            for item in full_test_predictions[variant]:
                 writer.writerow({"variant": variant, **item})
     for variant, probe in probes.items():
         torch.save(

@@ -39,6 +39,7 @@ try:
         local_trajectory_features,
     )
     from scripts.camera_flow_probe.train_probe import main as train_probe_main
+    from scripts.camera_flow_probe.train_probe import _common_local_supervision_rows
 except ModuleNotFoundError:
     torch = None
 
@@ -287,6 +288,20 @@ class CameraMetricTests(unittest.TestCase):
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
 class CameraProbeTrainingTests(unittest.TestCase):
+    def test_common_local_supervision_requires_both_variants(self) -> None:
+        rows = [{"case_id": "good"}, {"case_id": "aligned_missing"}]
+        loaded = {}
+        for case_id in ("good", "aligned_missing"):
+            loaded[case_id] = {
+                "fake_label_aligned": np.array([1 if case_id == "good" else 0], dtype=np.uint8),
+                "fake_valid_aligned": np.array([True]),
+                "fake_label_unaligned": np.array([1], dtype=np.uint8),
+                "fake_valid_unaligned": np.array([True]),
+            }
+        eligible, excluded = _common_local_supervision_rows(rows, loaded)
+        self.assertEqual([row["case_id"] for row in eligible], ["good"])
+        self.assertEqual(excluded[0]["case_id"], "aligned_missing")
+
     def test_synthetic_feature_gate_runs_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -353,6 +368,8 @@ class CameraProbeTrainingTests(unittest.TestCase):
             self.assertEqual(result, 0)
             summary = json.loads((root / "out" / "camera_aligned_local_probe_summary.json").read_text())
             self.assertEqual(summary["num_test_cases"], 4)
+            self.assertEqual(summary["local_supervision"]["num_common_primary_test_cases"], 4)
+            self.assertEqual(summary["full_test_sensitivity_metrics"]["local_aligned"]["overall"]["num_samples"], 8)
             self.assertIn(summary["status"], {"passed", "failed", "inconclusive"})
 
 
