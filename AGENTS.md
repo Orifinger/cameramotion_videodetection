@@ -67,6 +67,7 @@ Do not paste large raw logs into the experiment log when a compact metric table 
 - Store small, formal, reusable artifacts on NAS under the project directory when practical. This includes JSON/JSONL manifests, split definitions, YAML configs, CSV metrics, audit summaries, Markdown records, and compact logs.
 - Produce large formal artifacts in `/tmp` for speed. Once an expensive artifact passes its audit and will be reused, explicitly remind the user to upload it to OSS before the container can be lost. Do not assume the OSS upload has happened; record its OSS location in a small NAS manifest when the user provides it.
 - Before giving execution commands, classify each important output as disposable validation output, persistent small metadata, or reusable large artifact, and choose `/tmp`, NAS, or `/tmp` plus an OSS reminder accordingly.
+- Use `oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/camera_flow/` as the OSS root for reusable large artifacts from the camera-flow experiment. Put each finalized feature contract under a versioned subdirectory rather than mixing runs at the root.
 
 ## Server Compute Policy
 
