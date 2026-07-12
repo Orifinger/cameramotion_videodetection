@@ -15,7 +15,7 @@
 | 2026-07-10 | 普通 DataB 续训与相机文本 DataB 续训 | 未通过 | 经过匹配提示格式训练后，模型是否真正利用正确相机描述改善检测 | 正确相机描述不优于错误描述，并低于不提供相机描述；当前文本条件注入路线未学会利用相机内容 |
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
-| 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 三探针未通过；直接局部替代路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | aligned 相对 unaligned 的整体/复杂运动 AUC 为 -2.07/-3.39 点，bootstrap 95% CI 全为负；虽 patch AUC/IoU 略升，但不能建立检测收益 |
+| 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -666,15 +666,37 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 
 结论标记：`未通过`。相机补偿改善了一部分 patch 级空间排序和 IoU，但直接用已补偿局部 patch 分数聚合视频判别时，整体与复杂运动 AUC 显著下降，并出现 Fake recall 86.83%、Real recall 18.81% 的强 Fake 偏置。因此该结果不能支持“相机补偿局部轨迹提高 AIGC 视频检测”，也不进入 DataB、Qwen、SFT 或 RL 扩展。
 
-当前仍有一个严格限时的低成本复核方向：保留更强的全局轨迹判别，仅把 aligned/unaligned 局部分数作为辅助，分别做相同容量的验证集拟合分数融合。它只使用现有 849M 特征，不重跑 RAFT/DINO；若 `global+aligned` 不能稳定优于 `global+unaligned` 和 global-only，则停止当前几何相机补偿主路线。
+随后执行了一个严格限时的低成本复核：保留更强的全局轨迹判别，仅把 aligned/unaligned 局部分数作为辅助，分别做相同容量的验证集拟合分数融合。它只使用现有 849M 特征，不重跑 RAFT/DINO；预先约定若 `global+aligned` 不能稳定优于 `global+unaligned` 和 global-only，则停止当前几何相机补偿主路线。
 
 正式特征已由用户确认上传至 `oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/camera_flow/camera_flow_probe_40step_v3/full/features/`。上传对象数量和远端总字节数未单独提供，不作猜测。
 
 2026-07-12 融合首次执行未形成结果：服务器部署目录不是 Git 仓库，`git pull` 失败，随后仍运行旧版 `train_probe.py`；旧 summary 没有 `fusion_gate`，读取时报 `KeyError: 'fusion_gate'`。该事件标记为环境部署问题，不是融合实验失败，不记录融合指标。
 
+#### 低容量分数融合复核结果
+
+更新服务器文件后重新执行成功，结果仍保存在同一 `camera_aligned_local_probe_summary.json` 的 `fusion_gate` 字段。
+
+| 主 319-test 视频 AUC | 结果 | 相对 global-only |
+|---|---:|---:|
+| global-only | 64.59% | - |
+| global + unaligned | 64.77% | +0.19 点 |
+| global + aligned | 64.40% | -0.18 点 |
+
+| complex-motion AUC | 结果 | 相对 global-only |
+|---|---:|---:|
+| global-only | 67.81% | - |
+| global + unaligned | 68.35% | +0.53 点 |
+| global + aligned | 67.81% | +0.00 点 |
+
+验证集选择的局部非负权重为 unaligned `0.35`、aligned `0.27`。主测试上 `global+aligned` 相对 `global+unaligned` 的整体/复杂运动 AUC 差值为 -0.37/-0.53 点；bootstrap 均值 -0.38 点，95% CI 为 `[-0.89, +0.12]` 点。`global+aligned` 相对 global-only 的 AUC 差值 -0.18 点；bootstrap 95% CI 为 `[-0.93, +0.50]` 点。完整 321-test 敏感性结果方向一致：global、global+unaligned、global+aligned AUC 分别为 64.54%、64.70%、64.30%。
+
+融合结论标记：`未通过`。`global+aligned` 没有优于 global-only 或 unaligned 融合，complex-motion 也没有增量，五项预设验收全部失败。该结果说明 aligned 局部特征的 patch AUC/IoU 小幅提升不能转化为视频检测的独立增量。
+
+2026-07-12 最终收敛：当前几何相机补偿局部轨迹路线停止。停止范围包括继续调整融合权重、top-patch 聚合、anchor、RAFT/SEA-RAFT 和局部 MLP；原因是直接检测显著负增量，保留全局判别后的低容量融合也无正增量。已有特征、审计和定位结果保留为消融或负结果，不扩展到 DataB、Qwen、SFT、DPO 或 GRPO。
+
 ### 立即下一步
 
-先做一次现有分数的低容量融合复核：`global+unaligned` 对 `global+aligned`，融合参数只在 train 内固定 validation cases 拟合，主测试仍为共同 319 cases，完整 321 cases 只作敏感性结果。通过条件为 `global+aligned` 同时优于 global-only 和 `global+unaligned`，且 bootstrap 差值支持正增量；否则停止当前几何相机补偿主路线。
+暂停当前几何相机补偿路线，不继续追加试参。下一步重新选择能够把 camera 能力接入 AIGC 检测的主方法时，必须以新的低成本 gate 重新立项；本轮只保留“camera compensation 改善部分 patch 排序但不改善视频检测”的经验事实。
 
 
 ## 记录维护说明
