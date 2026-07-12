@@ -11,6 +11,7 @@ import numpy as np
 
 from scripts.camera_flow_probe.contracts import RunSpec, build_probe_manifest
 from scripts.camera_flow_probe.metrics import roc_auc
+from scripts.camera_flow_probe.select_manifest import main as select_manifest_main
 from scripts.camera_flow_probe.select_manifest import select_rows
 
 try:
@@ -195,6 +196,38 @@ class CameraMetricTests(unittest.TestCase):
         self.assertEqual(len(selected), 4)
         self.assertEqual(summary["by_source"], {"source_a": 2, "source_b": 2})
         self.assertEqual(summary["by_motion_bucket"], {"complex-motion": 2, "no-motion": 2})
+
+    def test_smoke_selection_writes_summary_json(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "manifest.jsonl"
+            output = root / "smoke.jsonl"
+            summary_path = root / "smoke_summary.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "case_id": "case_1",
+                        "dataset_split": "train",
+                        "source_name": "source_a",
+                        "motion_bucket": "no-motion",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with redirect_stdout(io.StringIO()):
+                exit_code = select_manifest_main(
+                    [
+                        "--manifest-jsonl",
+                        str(manifest),
+                        "--out-jsonl",
+                        str(output),
+                        "--summary-json",
+                        str(summary_path),
+                    ]
+                )
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8"))["case_count"], 1)
 
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")

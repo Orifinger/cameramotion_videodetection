@@ -20,6 +20,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest-jsonl", type=Path, required=True)
     parser.add_argument("--out-jsonl", type=Path, required=True)
+    parser.add_argument("--summary-json", type=Path)
     parser.add_argument("--split", choices=("train", "test", "all"), default="train")
     parser.add_argument("--per-source-motion", type=int, default=1)
     return parser.parse_args(argv)
@@ -68,16 +69,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         per_source_motion=args.per_source_motion,
     )
     write_jsonl(args.out_jsonl, selected)
-    print(
-        json.dumps(
-            {
-                "out_jsonl": str(args.out_jsonl),
-                **summary,
-            },
-            ensure_ascii=False,
-            indent=2,
+    payload = {
+        "out_jsonl": str(args.out_jsonl),
+        **summary,
+    }
+    if args.summary_json is not None:
+        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_json.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
         )
-    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 

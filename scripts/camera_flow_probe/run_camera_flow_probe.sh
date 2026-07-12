@@ -51,6 +51,7 @@ case "${MODE}" in
     python -m scripts.camera_flow_probe.select_manifest \
       --manifest-jsonl "${MANIFEST}" \
       --out-jsonl "${SMOKE_MANIFEST}" \
+      --summary-json "${OUT}/data/dataa_camera_flow_probe_smoke_summary.json" \
       --split train \
       --per-source-motion 1
     torchrun --standalone --nproc-per-node=1 \
