@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-jsonl", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--num-epochs", type=int, default=5)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=0,
+        help="Optional explicit optimizer-step cap for smoke tests; zero uses num_epochs.",
+    )
     parser.add_argument("--max-wall-seconds", type=float, default=21600.0)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
@@ -73,6 +79,7 @@ def synchronized_stop(rank: int, device: torch.device, should_stop: bool) -> boo
 
 def main() -> None:
     args = parse_args()
+    program_started = time.time()
     rank, local_rank, world_size = init_distributed()
     torch.set_num_threads(max(1, args.cpu_threads_per_rank))
     set_seed(args.seed, rank)
@@ -85,7 +92,7 @@ def main() -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
     steps_per_epoch = math.ceil(len(rows) / world_size)
-    planned_steps = steps_per_epoch * args.num_epochs
+    planned_steps = args.max_steps if args.max_steps > 0 else steps_per_epoch * args.num_epochs
     processor = load_processor(args.model_path)
     model = load_model(args.model_path, args.attn_implementation, torch.bfloat16)
     model = attach_new_lora(
@@ -120,6 +127,7 @@ def main() -> None:
         )
     model.train()
     started = time.time()
+    model_setup_seconds = started - program_started
     log_path = output_dir / "trainer_log.jsonl"
     completed_steps = 0
     stop_reason = "planned_steps_completed"
@@ -205,7 +213,13 @@ def main() -> None:
         "effective_records_seen": completed_steps * world_size,
         "stop_reason": stop_reason,
         "max_wall_seconds": args.max_wall_seconds,
-        "elapsed_seconds": elapsed,
+        "model_setup_seconds": model_setup_seconds,
+        "training_elapsed_seconds": elapsed,
+        "elapsed_seconds": time.time() - program_started,
+        "training_seconds_per_step": elapsed / completed_steps if completed_steps else None,
+        "aggregate_records_per_second": (
+            completed_steps * world_size / elapsed if elapsed > 0 else None
+        ),
         "learning_rate": args.learning_rate,
         "lora_rank": args.lora_rank,
         "lora_alpha": args.lora_alpha,

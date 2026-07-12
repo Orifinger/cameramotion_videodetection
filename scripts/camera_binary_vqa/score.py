@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 
 from scripts.camera_binary_vqa.runtime import (
     answer_token_ids,
@@ -20,6 +22,7 @@ from scripts.camera_binary_vqa.runtime import (
     prepare_prompt_batch,
     read_jsonl,
     set_seed,
+    write_json,
     yes_minus_no_score,
 )
 
@@ -51,6 +54,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    program_started = time.time()
     rank, local_rank, world_size = init_distributed()
     torch.set_num_threads(max(1, args.cpu_threads_per_rank))
     set_seed(args.seed, rank)
@@ -62,6 +66,7 @@ def main() -> None:
         model = attach_adapter(model, args.adapter_path)
     model.to(device)
     model.eval()
+    scoring_started = time.time()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -116,6 +121,36 @@ def main() -> None:
                         f"rank={rank} condition={condition_name} scored={condition_written}",
                         flush=True,
                     )
+    scoring_elapsed = time.time() - scoring_started
+    aggregate = torch.tensor(
+        [float(total_written), float(scoring_elapsed)], device=device, dtype=torch.float32
+    )
+    if world_size > 1:
+        count = aggregate[0].clone()
+        elapsed = aggregate[1].clone()
+        dist.all_reduce(count, op=dist.ReduceOp.SUM)
+        dist.all_reduce(elapsed, op=dist.ReduceOp.MAX)
+        aggregate = torch.stack((count, elapsed))
+    aggregate_records = int(aggregate[0].item())
+    aggregate_elapsed = float(aggregate[1].item())
+    if rank == 0:
+        write_json(
+            output_dir / "score_state.json",
+            {
+                "model_stage": args.model_stage,
+                "base_model": args.model_path,
+                "adapter_path": args.adapter_path,
+                "world_size": world_size,
+                "conditions": [name for name, _ in args.condition],
+                "aggregate_records": aggregate_records,
+                "model_setup_seconds": scoring_started - program_started,
+                "scoring_elapsed_seconds": aggregate_elapsed,
+                "aggregate_records_per_second": (
+                    aggregate_records / aggregate_elapsed if aggregate_elapsed > 0 else 0.0
+                ),
+                "elapsed_seconds": time.time() - program_started,
+            },
+        )
     print(f"rank={rank} saved={output_path} records={total_written}", flush=True)
     cleanup_distributed()
 

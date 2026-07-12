@@ -28,6 +28,7 @@ DATA_DIR="${RUN_ROOT}/data"
 TRAIN_DIR="${RUN_ROOT}/train"
 SCORE_ROOT="${RUN_ROOT}/scores"
 EVAL_DIR="${RUN_ROOT}/eval"
+PREFLIGHT_DIR="${RUN_ROOT}/preflight"
 LOG_PATH="${RUN_ROOT}/pipeline.log"
 
 TRAIN_JSONL="${DATA_DIR}/train_balanced.jsonl"
@@ -73,6 +74,21 @@ persist_small_results() {
   if [[ -f "${TRAIN_DIR}/trainer_log.jsonl" ]]; then
     mkdir -p "${PERSIST_ROOT}/train"
     cp -a "${TRAIN_DIR}/trainer_log.jsonl" "${PERSIST_ROOT}/train/"
+  fi
+  if [[ -d "${PREFLIGHT_DIR}" ]]; then
+    mkdir -p "${PERSIST_ROOT}/preflight"
+    find "${PREFLIGHT_DIR}" -maxdepth 1 -type f -name '*.json' \
+      -exec cp -a '{}' "${PERSIST_ROOT}/preflight/" \;
+    if [[ -f "${PREFLIGHT_DIR}/train_smoke/all_results.json" ]]; then
+      mkdir -p "${PERSIST_ROOT}/preflight/train_smoke"
+      cp -a "${PREFLIGHT_DIR}/train_smoke/all_results.json" \
+        "${PERSIST_ROOT}/preflight/train_smoke/"
+    fi
+    if [[ -f "${PREFLIGHT_DIR}/score/score_state.json" ]]; then
+      mkdir -p "${PERSIST_ROOT}/preflight/score"
+      cp -a "${PREFLIGHT_DIR}/score/score_state.json" \
+        "${PERSIST_ROOT}/preflight/score/"
+    fi
   fi
   cp -a "${LOG_PATH}" "${PERSIST_ROOT}/" 2>/dev/null || true
 }
@@ -201,24 +217,69 @@ evaluate_all() {
 }
 
 preflight() {
+  mkdir -p "${PREFLIGHT_DIR}"
+  "${PYTHON_BIN}" -m scripts.camera_binary_vqa.preflight_environment \
+    --project-root "${PROJECT_ROOT}" \
+    --model-path "${MODEL_PATH}" \
+    --manifest-jsonl "${MANIFEST_JSONL}" \
+    --tmp-root "${RUN_ROOT}" \
+    --persistent-root "${PERSIST_ROOT}" \
+    --oss-uri "${OSS_URI}" \
+    --expected-gpus "${NPROC_PER_NODE}" \
+    --minimum-free-gb 100 \
+    --output-json "${PREFLIGHT_DIR}/environment_audit.json"
   build_data
-  mkdir -p "${RUN_ROOT}/preflight"
-  CUDA_VISIBLE_DEVICES=0 "${PYTHON_BIN}" -m scripts.camera_binary_vqa.score \
+  mkdir -p "${PREFLIGHT_DIR}/score"
+  torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
+    -m scripts.camera_binary_vqa.score \
     --model-path "${MODEL_PATH}" \
     --condition "matched_video=${DEV_MATCHED}" \
-    --output-dir "${RUN_ROOT}/preflight" \
+    --output-dir "${PREFLIGHT_DIR}/score" \
     --model-stage preflight \
-    --max-samples-per-condition 2 \
+    --max-samples-per-condition 32 \
     --video-fps "${VIDEO_FPS}" \
     --video-max-pixels "${VIDEO_MAX_PIXELS}" \
     --cpu-threads-per-rank "${CPU_THREADS_PER_RANK}" \
     --seed "${SEED}"
+  torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
+    -m scripts.camera_binary_vqa.train \
+    --model-path "${MODEL_PATH}" \
+    --train-jsonl "${TRAIN_JSONL}" \
+    --output-dir "${PREFLIGHT_DIR}/train_smoke" \
+    --num-epochs "${NUM_EPOCHS}" \
+    --max-steps 4 \
+    --max-wall-seconds "${MAX_TRAIN_WALL_SECONDS}" \
+    --learning-rate 2e-4 \
+    --lora-rank 64 \
+    --lora-alpha 128 \
+    --lora-dropout 0.05 \
+    --video-fps "${VIDEO_FPS}" \
+    --video-max-pixels "${VIDEO_MAX_PIXELS}" \
+    --cpu-threads-per-rank "${CPU_THREADS_PER_RANK}" \
+    --logging-steps 1 \
+    --seed "${SEED}"
+  "${PYTHON_BIN}" -m scripts.camera_binary_vqa.estimate_duration \
+    --data-summary "${DATA_DIR}/data_summary.json" \
+    --train-state "${PREFLIGHT_DIR}/train_smoke/all_results.json" \
+    --score-state "${PREFLIGHT_DIR}/score/score_state.json" \
+    --num-epochs "${NUM_EPOCHS}" \
+    --max-train-wall-seconds "${MAX_TRAIN_WALL_SECONDS}" \
+    --output-json "${PREFLIGHT_DIR}/duration_estimate.json"
+  require_file "${PREFLIGHT_DIR}/train_smoke/final/adapter_model.safetensors"
+  rm -f "${PREFLIGHT_DIR}/train_smoke/final/adapter_model.safetensors"
+  persist_small_results
+  echo "=== Environment audit ==="
+  cat "${PREFLIGHT_DIR}/environment_audit.json"
+  echo "=== Duration estimate ==="
+  cat "${PREFLIGHT_DIR}/duration_estimate.json"
 }
 
 export OMP_NUM_THREADS="${CPU_THREADS_PER_RANK}"
 export TOKENIZERS_PARALLELISM=false
 
-require_dir "${MODEL_PATH}"
+if [[ "${STAGE}" != "preflight" ]]; then
+  require_dir "${MODEL_PATH}"
+fi
 echo "=== DataA balanced binary camera VQA unattended gate ==="
 echo "stage=${STAGE} run_name=${RUN_NAME}"
 echo "model_path=${MODEL_PATH}"
