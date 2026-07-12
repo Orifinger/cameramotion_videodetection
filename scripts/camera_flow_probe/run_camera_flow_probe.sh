@@ -92,11 +92,15 @@ case "${MODE}" in
       --stride-frames 8
     ;;
   audit)
+    set +e
     python -m scripts.camera_flow_probe.summarize_extraction \
       --manifest-jsonl "${MANIFEST}" \
       --feature-dir "${FEATURE_ROOT}/features" \
       --out-json "${FEATURE_ROOT}/extraction_audit.json"
+    AUDIT_STATUS=$?
+    set -e
     cp "${FEATURE_ROOT}/extraction_audit.json" "${META_DIR}/full_extraction_audit.json"
+    exit "${AUDIT_STATUS}"
     ;;
   probe)
     python -m scripts.camera_flow_probe.train_probe \
