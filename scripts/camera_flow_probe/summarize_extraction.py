@@ -44,7 +44,10 @@ def summarize(
     metadata: list[dict[str, Any]] = []
     missing: list[str] = []
     invalid: list[dict[str, str]] = []
+    non_positive_mask_cases: list[dict[str, str]] = []
     positive_mask_cases = 0
+    valid_by_split: Counter[str] = Counter()
+    positive_by_split: Counter[str] = Counter()
     inlier_rates: list[float] = []
     pair_errors: list[float] = []
     by_bucket: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
@@ -64,11 +67,24 @@ def summarize(
                 positive_count = int(archive["fake_label_aligned"].sum())
                 if not np.isfinite(aligned).all() or not np.isfinite(unaligned).all():
                     raise ValueError("local feature arrays contain non-finite values")
-                positive_mask_cases += int(positive_count > 0)
         except Exception as exc:  # noqa: BLE001
             invalid.append({"case_id": case_id, "error": f"{type(exc).__name__}: {exc}"})
             continue
         metadata.append(item)
+        split = str(row.get("dataset_split", "unknown"))
+        valid_by_split[split] += 1
+        if positive_count > 0:
+            positive_mask_cases += 1
+            positive_by_split[split] += 1
+        else:
+            non_positive_mask_cases.append(
+                {
+                    "case_id": case_id,
+                    "dataset_split": split,
+                    "source_name": str(row.get("source_name", "unknown")),
+                    "motion_bucket": str(row.get("motion_bucket", "unknown")),
+                }
+            )
         source_counts[str(row.get("source_name", ""))] += 1
         bucket = str(row.get("motion_bucket", "unknown"))
         real_inlier = float((item.get("real_quality") or {}).get("median_camera_inlier_rate", float("nan")))
@@ -115,6 +131,16 @@ def summarize(
             "paired_camera_corner_error_normalized": pair_summary,
             "source_counts": dict(source_counts),
         },
+        "positive_mask_by_split": {
+            split: {
+                "valid_feature_cases": int(valid_by_split[split]),
+                "positive_mask_cases": int(positive_by_split[split]),
+                "positive_mask_case_rate": (
+                    float(positive_by_split[split] / valid_by_split[split]) if valid_by_split[split] else 0.0
+                ),
+            }
+            for split in sorted(valid_by_split)
+        },
         "by_motion_bucket": {
             bucket: {
                 "camera_inlier_rate": _finite_quantiles(values["inlier"]),
@@ -124,6 +150,7 @@ def summarize(
         },
         "missing_cases": missing,
         "invalid_cases": invalid,
+        "non_positive_mask_cases": non_positive_mask_cases,
     }
 
 

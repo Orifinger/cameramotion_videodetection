@@ -13,6 +13,7 @@ from scripts.camera_flow_probe.contracts import RunSpec, build_probe_manifest
 from scripts.camera_flow_probe.metrics import roc_auc
 from scripts.camera_flow_probe.select_manifest import main as select_manifest_main
 from scripts.camera_flow_probe.select_manifest import select_rows
+from scripts.camera_flow_probe.summarize_extraction import summarize
 
 try:
     import cv2  # noqa: F401
@@ -228,6 +229,52 @@ class CameraMetricTests(unittest.TestCase):
                 )
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8"))["case_count"], 1)
+
+    def test_extraction_audit_lists_non_positive_mask_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feature_dir = root / "features"
+            feature_dir.mkdir()
+            manifest = root / "manifest.jsonl"
+            rows = []
+            for index, positive in enumerate((True, False), 1):
+                case_id = f"case_{index}"
+                rows.append(
+                    {
+                        "case_id": case_id,
+                        "dataset_split": "train" if index == 1 else "test",
+                        "source_name": "source_a",
+                        "motion_bucket": "no-motion",
+                    }
+                )
+                labels = np.array([[[1 if positive else 0]]], dtype=np.uint8)
+                np.savez(
+                    feature_dir / f"{case_id}.npz",
+                    fake_local_aligned=np.zeros((1, 1, 1, 2), dtype=np.float32),
+                    fake_local_unaligned=np.zeros((1, 1, 1, 2), dtype=np.float32),
+                    fake_label_aligned=labels,
+                )
+                (feature_dir / f"{case_id}.json").write_text(
+                    json.dumps(
+                        {
+                            "real_quality": {"median_camera_inlier_rate": 0.9},
+                            "fake_quality": {"median_camera_inlier_rate": 0.9},
+                            "paired_camera_consistency": {"median_corner_error_normalized": 0.001},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            manifest.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            result = summarize(
+                manifest,
+                feature_dir,
+                min_coverage=0.95,
+                min_positive_mask_rate=0.4,
+                min_camera_inlier_rate=0.5,
+                max_pair_camera_error_normalized=0.02,
+            )
+            self.assertEqual(result["non_positive_mask_cases"][0]["case_id"], "case_2")
+            self.assertEqual(result["positive_mask_by_split"]["test"]["positive_mask_cases"], 0)
 
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
