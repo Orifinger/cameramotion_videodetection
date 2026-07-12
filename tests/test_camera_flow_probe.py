@@ -253,6 +253,9 @@ class CameraMetricTests(unittest.TestCase):
                     fake_local_aligned=np.zeros((1, 1, 1, 2), dtype=np.float32),
                     fake_local_unaligned=np.zeros((1, 1, 1, 2), dtype=np.float32),
                     fake_label_aligned=labels,
+                    fake_label_unaligned=labels,
+                    fake_mask_aligned=labels.astype(np.float32) * 0.2,
+                    fake_mask_unaligned=labels.astype(np.float32) * 0.2,
                 )
                 (feature_dir / f"{case_id}.json").write_text(
                     json.dumps(
@@ -274,6 +277,7 @@ class CameraMetricTests(unittest.TestCase):
                 max_pair_camera_error_normalized=0.02,
             )
             self.assertEqual(result["non_positive_mask_cases"][0]["case_id"], "case_2")
+            self.assertEqual(result["non_positive_mask_cases"][0]["max_aligned_mask_fraction"], 0.0)
             self.assertEqual(result["positive_mask_by_split"]["test"]["positive_mask_cases"], 0)
 
 

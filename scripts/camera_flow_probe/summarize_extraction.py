@@ -44,7 +44,7 @@ def summarize(
     metadata: list[dict[str, Any]] = []
     missing: list[str] = []
     invalid: list[dict[str, str]] = []
-    non_positive_mask_cases: list[dict[str, str]] = []
+    non_positive_mask_cases: list[dict[str, Any]] = []
     positive_mask_cases = 0
     valid_by_split: Counter[str] = Counter()
     positive_by_split: Counter[str] = Counter()
@@ -64,7 +64,12 @@ def summarize(
             with np.load(npz_path, allow_pickle=False) as archive:
                 aligned = archive["fake_local_aligned"]
                 unaligned = archive["fake_local_unaligned"]
+                aligned_mask = archive["fake_mask_aligned"]
+                unaligned_mask = archive["fake_mask_unaligned"]
                 positive_count = int(archive["fake_label_aligned"].sum())
+                positive_unaligned_count = int(archive["fake_label_unaligned"].sum())
+                max_aligned_mask_fraction = float(aligned_mask.max()) if aligned_mask.size else 0.0
+                max_unaligned_mask_fraction = float(unaligned_mask.max()) if unaligned_mask.size else 0.0
                 if not np.isfinite(aligned).all() or not np.isfinite(unaligned).all():
                     raise ValueError("local feature arrays contain non-finite values")
         except Exception as exc:  # noqa: BLE001
@@ -83,6 +88,10 @@ def summarize(
                     "dataset_split": split,
                     "source_name": str(row.get("source_name", "unknown")),
                     "motion_bucket": str(row.get("motion_bucket", "unknown")),
+                    "aligned_positive_patch_count": positive_count,
+                    "unaligned_positive_patch_count": positive_unaligned_count,
+                    "max_aligned_mask_fraction": max_aligned_mask_fraction,
+                    "max_unaligned_mask_fraction": max_unaligned_mask_fraction,
                 }
             )
         source_counts[str(row.get("source_name", ""))] += 1

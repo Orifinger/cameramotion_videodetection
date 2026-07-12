@@ -605,7 +605,7 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 
 ### 立即下一步
 
-更新 audit 代码后重新运行快速审计，取得 8 个无正 patch case 的 id、train/test、来源和 motion bucket，并检查 `/tmp` 特征目录大小。确认处理规则后，将需要复用的大特征备份到 OSS，再训练和比较三组 MLP。
+更新 audit 代码后重新运行快速审计，取得 8 个无正 patch case 的 id、train/test、来源、motion bucket，以及 aligned/unaligned mask 的最大 patch 覆盖率。用它区分 10% 标签阈值过高与 mask 映射丢失，并检查 `/tmp` 特征目录大小。确认处理规则后，将需要复用的大特征备份到 OSS，再训练和比较三组 MLP。
 
 
 ## 记录维护说明
