@@ -179,17 +179,18 @@ def main() -> None:
                 handle.write(json.dumps(log_row, ensure_ascii=False) + "\n")
             print(json.dumps(log_row, ensure_ascii=False), flush=True)
 
-        if completed_steps == steps_per_epoch:
+        if completed_steps % steps_per_epoch == 0:
+            epoch_number = completed_steps // steps_per_epoch
             if world_size > 1:
                 dist.barrier()
             if rank == 0:
                 save_adapter(
                     model,
                     processor,
-                    output_dir / "checkpoint-epoch-1",
+                    output_dir / f"checkpoint-epoch-{epoch_number}",
                     {
                         "step": completed_steps,
-                        "effective_epoch": 1.0,
+                        "effective_epoch": float(epoch_number),
                         "base_model": args.model_path,
                         "train_jsonl": args.train_jsonl,
                     },

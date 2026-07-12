@@ -29,6 +29,7 @@ REQUIRED_PROJECT_FILES = (
     "scripts/camera_binary_vqa/preflight_environment.py",
     "scripts/camera_binary_vqa/distributed_smoke.py",
     "scripts/camera_binary_vqa/monitor_gpu_utilization.py",
+    "scripts/camera_binary_vqa/watch_checkpoint_uploads.py",
     "scripts/camera_binary_vqa/run_unattended.sh",
 )
 

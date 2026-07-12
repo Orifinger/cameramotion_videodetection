@@ -34,8 +34,8 @@ LOG_PATH="${RUN_ROOT}/pipeline.log"
 GPU_UTIL_SAMPLE_SECONDS="${GPU_UTIL_SAMPLE_SECONDS:-60}"
 GPU_UTIL_WINDOW_SECONDS="${GPU_UTIL_WINDOW_SECONDS:-7200}"
 MIN_GPU_UTIL_PERCENT="${MIN_GPU_UTIL_PERCENT:-30}"
-FAIL_ON_LOW_GPU_UTIL="${FAIL_ON_LOW_GPU_UTIL:-1}"
 GPU_MONITOR_PID=""
+CHECKPOINT_UPLOADER_PID=""
 
 TRAIN_JSONL="${DATA_DIR}/train_balanced.jsonl"
 DEV_MATCHED="${DATA_DIR}/dev_matched_video.jsonl"
@@ -86,27 +86,27 @@ stop_gpu_monitor() {
   GPU_MONITOR_PID=""
 }
 
-enforce_gpu_utilization() {
-  local summary="${GPU_MONITOR_DIR}/gpu_utilization_summary.json"
-  require_file "${summary}"
-  "${PYTHON_BIN}" -c '
-import json, sys
-path, minimum, fail_on_low = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
-summary = json.load(open(path, encoding="utf-8"))
-complete = summary.get("num_complete_windows", 0)
-violations = summary.get("num_violations", 0)
-full_mean = float(summary.get("full_compute_phase_mean_percent", 0.0))
-passed = violations == 0 and (complete > 0 or full_mean >= minimum) and not summary.get("errors")
-print(json.dumps({
-    "gpu_utilization_requirement_passed": passed,
-    "complete_two_hour_windows": complete,
-    "violations": violations,
-    "full_compute_phase_mean_percent": full_mean,
-    "minimum_percent": minimum,
-}, ensure_ascii=False, indent=2))
-if fail_on_low and not passed:
-    raise SystemExit(3)
-' "${summary}" "${MIN_GPU_UTIL_PERCENT}" "${FAIL_ON_LOW_GPU_UTIL}"
+start_checkpoint_uploader() {
+  if [[ "${AUTO_UPLOAD_OSS}" != "1" ]]; then
+    return
+  fi
+  mkdir -p "${RUN_ROOT}/checkpoint_uploads"
+  "${PYTHON_BIN}" -m scripts.camera_binary_vqa.watch_checkpoint_uploads \
+    --parent-pid "$$" \
+    --train-dir "${TRAIN_DIR}" \
+    --oss-uri "${OSS_URI}" \
+    --log-jsonl "${RUN_ROOT}/checkpoint_uploads/upload_log.jsonl" \
+    --poll-seconds 60 &
+  CHECKPOINT_UPLOADER_PID=$!
+  echo "Checkpoint OSS uploader started: pid=${CHECKPOINT_UPLOADER_PID}"
+}
+
+stop_checkpoint_uploader() {
+  if [[ -n "${CHECKPOINT_UPLOADER_PID}" ]] && kill -0 "${CHECKPOINT_UPLOADER_PID}" 2>/dev/null; then
+    kill -TERM "${CHECKPOINT_UPLOADER_PID}" 2>/dev/null || true
+    wait "${CHECKPOINT_UPLOADER_PID}" 2>/dev/null || true
+  fi
+  CHECKPOINT_UPLOADER_PID=""
 }
 
 persist_small_results() {
@@ -145,6 +145,11 @@ persist_small_results() {
     mkdir -p "${PERSIST_ROOT}/gpu_monitor"
     cp -a "${GPU_MONITOR_DIR}/." "${PERSIST_ROOT}/gpu_monitor/"
   fi
+  if [[ -f "${RUN_ROOT}/checkpoint_uploads/upload_log.jsonl" ]]; then
+    mkdir -p "${PERSIST_ROOT}/checkpoint_uploads"
+    cp -a "${RUN_ROOT}/checkpoint_uploads/upload_log.jsonl" \
+      "${PERSIST_ROOT}/checkpoint_uploads/"
+  fi
   cp -a "${LOG_PATH}" "${PERSIST_ROOT}/" 2>/dev/null || true
 }
 
@@ -152,6 +157,7 @@ archive_on_exit() {
   local status=$?
   trap - EXIT
   set +e
+  stop_checkpoint_uploader
   stop_gpu_monitor
   persist_small_results
   if [[ "${AUTO_UPLOAD_OSS}" == "1" && "${STAGE}" != "preflight" ]]; then
@@ -346,13 +352,14 @@ case "${STAGE}" in
     fi
     build_data
     start_gpu_monitor
-    score_base
+    start_checkpoint_uploader
     train_model
+    stop_checkpoint_uploader
+    score_base
     score_epoch1
     score_final
     stop_gpu_monitor
     evaluate_all
-    enforce_gpu_utilization
     date -u +'%Y-%m-%dT%H:%M:%SZ' > "${RUN_ROOT}/COMPLETED"
     ;;
   *)

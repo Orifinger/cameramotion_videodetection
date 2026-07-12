@@ -111,7 +111,7 @@ def write_summary(
     output = {
         "monitor": "mean GPU utilization across all GPUs in fixed two-hour windows",
         "status": "running" if running else (
-            "failed" if violations or errors else "passed"
+            "warning" if violations or errors else "completed"
         ),
         "minimum_window_mean_percent": minimum,
         "num_complete_windows": len(complete),

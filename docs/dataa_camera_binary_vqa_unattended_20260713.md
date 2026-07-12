@@ -18,8 +18,8 @@
 脚本按以下顺序自动执行：
 
 1. 审计 1080-case manifest 和所有原视频路径，按固定 train/test identity 构建逐 primitive 平衡问答。
-2. 未训练起点在正确视频开发集上打 candidate score。
-3. 使用原始 real MP4、8 FPS、rank-64 LoRA 最多训练 5 轮；训练最多占 4.5 小时，至少完成一轮。
+2. 使用原始 real MP4、8 FPS、rank-64 LoRA 最多训练 5 轮；训练最多占 4.5 小时，至少完成一轮。长时间训练优先执行，以尽快进入稳定的高 GPU 负载阶段。
+3. 训练完成后，未训练起点在正确视频开发集上打 candidate score。
 4. 评测第一轮 checkpoint 的正确视频结果。
 5. 评测最终 checkpoint 的正确视频、对立标签视频置换、无视频三种条件。
 6. 汇总 AP、AUC、balanced accuracy、paired question accuracy 和固定 gate。
@@ -39,6 +39,7 @@
 - `scripts/camera_binary_vqa/preflight_environment.py`
 - `scripts/camera_binary_vqa/distributed_smoke.py`
 - `scripts/camera_binary_vqa/monitor_gpu_utilization.py`
+- `scripts/camera_binary_vqa/watch_checkpoint_uploads.py`
 - `scripts/camera_binary_vqa/run_unattended.sh`
 
 ## 离开电脑前的短检查
@@ -118,7 +119,9 @@ bash scripts/camera_binary_vqa/run_unattended.sh
 /tmp/1res/dataa_camera_binary_vqa/<运行名>/gpu_monitor/gpu_utilization_summary.json
 ```
 
-默认 `FAIL_ON_LOW_GPU_UTIL=1`；任一完整两小时窗口低于 30% 时，实验结果仍会正常评测、归档和上传，但流水线最终返回失败状态并记录具体窗口。监控不通过无意义的额外计算抬高数值。
+GPU 利用率只是一项服务器保活监控，不属于实验验收条件，也不会改变任务退出状态或实验结论。若某个窗口低于 30%，摘要只记录 `warning`，用于解释容器被平台回收的风险。
+
+训练会在每个 epoch 保存一个稳定 checkpoint。后台 watcher 每 60 秒检查一次新 checkpoint，并立即执行对应的 `ossutil64 cp -r` 上传；因此即使容器之后因平台问题被回收，已经完成的 epoch adapter 仍保存在 OSS。训练结束后才执行四组模型评测，以避免任务开头长时间停留在可能利用率较低的纯推理阶段。
 
 ## 产物位置
 
