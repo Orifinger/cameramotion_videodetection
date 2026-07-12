@@ -17,7 +17,7 @@
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
 | 2026-07-12 | 相机分层同源配对独立判别最小验证 | 未通过，当前配对排序配方停止 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | Pair margin 被优化但 AUC 仅增 0.46 点、pair accuracy 仅增 1.56 点、复杂运动 AUC 仅增 0.27 点，bootstrap 跨 0；不进入 VIF 与 camera pretext |
-| 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 已立项，待执行阶段一 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 代码与验收条件已固定；先跑 correct/shuffled/base 相机学习曲线，阶段一未通过即停止 |
+| 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 48 步阶段一未通过，96 步复核待执行 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 48 步仍未达门槛，但 correct 学习曲线和相对 shuffled 差距仍上升；按预案只补一轮到 96 步，仍不过即停止 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -798,7 +798,7 @@ Smoke 的 DataA pair step 为 loss 1.4200、binary loss 1.2252、pair loss 0.974
 ### 状态与日期
 
 - 日期：2026-07-12。
-- 状态：`已立项，待执行阶段一`。
+- 状态：`48 步阶段一未通过；训练不足与最终不可迁移之间结论不足，按预案执行一次 96 步复核`。
 - 执行说明：`docs/camera_pretext_transfer_validation_20260712.md`。
 
 ### 模型与数据
@@ -841,7 +841,29 @@ Smoke 的 DataA pair step 为 loss 1.4200、binary loss 1.2252、pair loss 0.974
 - 初始 detection checkpoint 已看过完整 DataB；DataB replay 只用于能力保留，不能作为 held-out 证明。
 - 固定 DataA 开发身份已参与多轮方案诊断，最终论文仍需要独立保留集或明确称为开发消融。
 - 阶段一的 camera labels 来自 CameraBench 标签体系，只建立相机能力是否可学；只有阶段二 correct 同时超过 no-pretext 与 shuffled 才建立相机监督的检测迁移证据。
-- 立即执行数据构建审计和单卡两步 smoke；工程链路正常后运行阶段一 correct/shuffled 的 step 24/48 学习曲线。阶段一未通过，不执行阶段二，也不追加 GRPO、DPO、训练轮数或 prompt-side camera 文本。
+- 已完成数据构建、smoke 和 step 24/48 学习曲线。48 步未通过时不执行阶段二；只有 correct 的语义学习曲线仍上升且与 shuffled 差距扩大，才按预案补到总计 96 步。96 步仍未通过后，不再追加 GRPO、DPO、训练轮数或 prompt-side camera 文本。
+
+### 2026-07-13 阶段一 24/48 步结果
+
+结果来源：
+
+- `/tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_gate_step_24.json`
+- `/tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_gate_step_48.json`
+
+321 个固定开发 case 均完成预测。基础模型无法遵循新 camera 输出格式，其指标只作为零训练参照；判断正确 camera 监督内容是否有效，主要比较等算力 correct 与 shuffled 分支。
+
+| checkpoint | 分支 | 格式有效率 | Exact set | Motion bucket ACC | Micro-F1 | Macro-F1 |
+|---|---|---:|---:|---:|---:|---:|
+| step 24 | 正确相机标签 | 96.57% | 1.87% | 21.50% | 32.03% | 17.78% |
+| step 24 | 错误语义置换标签 | 96.26% | 0.00% | 20.25% | 25.66% | 18.08% |
+| step 48 | 正确相机标签 | 91.90% | 1.25% | 28.66% | 38.71% | 20.92% |
+| step 48 | 错误语义置换标签 | 86.92% | 0.00% | 24.61% | 22.26% | 16.33% |
+
+step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucket accuracy `+4.05` 点、micro-F1 `+16.45` 点、macro-F1 `+4.58` 点。correct 从 step 24 到 48：motion bucket accuracy `+7.17` 点、micro-F1 `+6.68` 点、macro-F1 `+3.13` 点；同期 shuffled 的 micro-F1 和 macro-F1 分别下降 `3.40` 和 `1.75` 点。
+
+结论标记：`结论不足，当前阶段一未通过`。它没有达到预设的 95% 格式、correct-vs-shuffled macro-F1 `+10` 点和 50% motion bucket accuracy，不能进入阶段二。但 correct 的三项语义指标仍同步上升，且与 shuffled 的差距从 step 24 到 48 扩大，不属于“正确监督与错误监督同样无效”的形态。按照实验开始前约定的学习曲线规则，只允许补一轮到总计 96 步；96 步仍未通过就停止该路线。
+
+同时记录一个训练实现更正：首轮 SFT 只监督 `<camera_motion>...</camera_motion>` 内容，没有把 chat template 的 assistant 结束标记纳入 loss，这与 step 24→48 格式有效率下降一致。2026-07-13 起，correct 与 shuffled 续训均以相同方式监督目标之后的 assistant 结束标记；这是格式终止监督修复，不改变 camera 标签内容。为保持历史可追溯，以上 24/48 原始结果不覆盖。
 
 ## 记录维护说明
 

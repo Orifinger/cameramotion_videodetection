@@ -8,6 +8,7 @@ from scripts.camera_pretext_transfer.runtime import (
     find_last_subsequence,
     multilabel_metrics,
     parse_camera_response,
+    target_supervision_span,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +46,12 @@ class CameraPretextRuntimeTests(unittest.TestCase):
     def test_find_last_subsequence(self) -> None:
         self.assertEqual(find_last_subsequence([1, 2, 3, 2, 3], [2, 3]), 3)
         self.assertEqual(find_last_subsequence([1, 2], [3]), -1)
+
+    def test_target_supervision_includes_assistant_terminator(self) -> None:
+        start, end = target_supervision_span(
+            [0, 0, 10, 20, 21, 99], [0, 0, 1, 1, 1, 1], [20, 21]
+        )
+        self.assertEqual((start, end), (3, 6))
 
     def test_response_requires_exact_tagged_json(self) -> None:
         allowed = ["no-motion", "complex-motion"]

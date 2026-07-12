@@ -66,21 +66,37 @@ build_data() {
 train_camera() {
   local target_kind="$1"
   local train_jsonl="$2"
+  local initial_adapter="${3:-}"
   local output_dir="${CAMERA_ROOT}/${target_kind}"
   require_file "${train_jsonl}"
-  torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
-    -m scripts.camera_pretext_transfer.train_camera_sft \
-    --model-path "${MODEL_PATH}" \
-    --train-jsonl "${train_jsonl}" \
-    --output-dir "${output_dir}" \
-    --max-steps "${CAMERA_STEPS}" \
-    --learning-rate 1e-5 \
-    --lora-rank 32 \
-    --lora-alpha 64 \
-    --lora-dropout 0.05 \
-    --max-pixels "${MAX_PIXELS}" \
-    --save-steps 24 \
-    --seed 20260712
+  if [[ -n "${initial_adapter}" ]]; then
+    require_dir "${initial_adapter}"
+    torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
+      -m scripts.camera_pretext_transfer.train_camera_sft \
+      --model-path "${MODEL_PATH}" \
+      --initial-adapter-path "${initial_adapter}" \
+      --train-jsonl "${train_jsonl}" \
+      --output-dir "${output_dir}" \
+      --max-steps "${CAMERA_STEPS}" \
+      --learning-rate 1e-5 \
+      --max-pixels "${MAX_PIXELS}" \
+      --save-steps 24 \
+      --seed 20260712
+  else
+    torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
+      -m scripts.camera_pretext_transfer.train_camera_sft \
+      --model-path "${MODEL_PATH}" \
+      --train-jsonl "${train_jsonl}" \
+      --output-dir "${output_dir}" \
+      --max-steps "${CAMERA_STEPS}" \
+      --learning-rate 1e-5 \
+      --lora-rank 32 \
+      --lora-alpha 64 \
+      --lora-dropout 0.05 \
+      --max-pixels "${MAX_PIXELS}" \
+      --save-steps 24 \
+      --seed 20260712
+  fi
 }
 
 infer_camera() {
@@ -205,6 +221,29 @@ case "${STAGE}" in
   infer_camera_shuffled_24) infer_camera shuffled_24 "${CAMERA_ROOT}/shuffled/checkpoint-24" "${CAMERA_DEV_CANONICAL}" ;;
   infer_camera_shuffled_48) infer_camera shuffled_48 "${CAMERA_ROOT}/shuffled/checkpoint-48" "${CAMERA_DEV_CANONICAL}" ;;
   eval_stage1) eval_stage1 ;;
+  continue_correct_96)
+    CAMERA_STEPS=48 train_camera correct_96 "${CAMERA_TRAIN_CORRECT}" \
+      "${CAMERA_ROOT}/correct/checkpoint-48"
+    ;;
+  continue_shuffled_96)
+    CAMERA_STEPS=48 train_camera shuffled_96 "${CAMERA_TRAIN_SHUFFLED}" \
+      "${CAMERA_ROOT}/shuffled/checkpoint-48"
+    ;;
+  infer_camera_correct_96)
+    infer_camera correct_96 "${CAMERA_ROOT}/correct_96/final" "${CAMERA_DEV_CANONICAL}"
+    ;;
+  infer_camera_shuffled_96)
+    infer_camera shuffled_96 "${CAMERA_ROOT}/shuffled_96/final" "${CAMERA_DEV_CANONICAL}"
+    ;;
+  eval_stage1_96)
+    eval_camera_one correct_96 "${CAMERA_DEV_CANONICAL}"
+    eval_camera_one shuffled_96 "${CAMERA_DEV_CANONICAL}"
+    "${PYTHON_BIN}" -m scripts.camera_pretext_transfer.eval_stage1_gate \
+      --base-summary "${CAMERA_EVAL_ROOT}/base.json" \
+      --correct-summary "${CAMERA_EVAL_ROOT}/correct_96.json" \
+      --shuffled-summary "${CAMERA_EVAL_ROOT}/shuffled_96.json" \
+      --output-json "${CAMERA_EVAL_ROOT}/stage1_gate_step_96.json"
+    ;;
   infer_camera_paraphrase)
     infer_camera "correct_${CAMERA_CHECKPOINT_STEP}_paraphrased" \
       "${CAMERA_ROOT}/correct/checkpoint-${CAMERA_CHECKPOINT_STEP}" "${CAMERA_DEV_PARAPHRASED}"

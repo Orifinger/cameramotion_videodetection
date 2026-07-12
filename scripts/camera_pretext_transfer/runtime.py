@@ -19,6 +19,21 @@ def find_last_subsequence(values: Sequence[int], needle: Sequence[int]) -> int:
     return -1
 
 
+def target_supervision_span(
+    input_ids: Sequence[int], attention_mask: Sequence[int], target_ids: Sequence[int]
+) -> tuple[int, int]:
+    start = find_last_subsequence(input_ids, target_ids)
+    if start < 0:
+        return -1, -1
+    valid_positions = [index for index, value in enumerate(attention_mask) if int(value) != 0]
+    if not valid_positions:
+        return -1, -1
+    end = valid_positions[-1] + 1
+    if end < start + len(target_ids):
+        return -1, -1
+    return start, end
+
+
 def prepare_sft_batch(
     samples: Sequence[Mapping[str, Any]], processor: Any, device: Any, max_pixels: int
 ) -> dict[str, Any]:
@@ -56,12 +71,12 @@ def prepare_sft_batch(
     for row_index, target in enumerate(target_texts):
         target_ids = processor.tokenizer.encode(target, add_special_tokens=False)
         input_ids = batch["input_ids"][row_index].tolist()
-        start = find_last_subsequence(input_ids, target_ids)
+        attention_mask = batch["attention_mask"][row_index].tolist()
+        start, end = target_supervision_span(input_ids, attention_mask, target_ids)
         if start < 0:
             raise ValueError(f"camera target tokens were not found in rendered conversation: {target}")
-        labels[row_index, start : start + len(target_ids)] = batch["input_ids"][
-            row_index, start : start + len(target_ids)
-        ]
+        # Include the chat template's assistant terminator so generation learns to stop cleanly.
+        labels[row_index, start:end] = batch["input_ids"][row_index, start:end]
     batch["labels"] = labels
     return {
         key: value.to(device, non_blocking=True) if hasattr(value, "to") else value

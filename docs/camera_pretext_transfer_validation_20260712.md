@@ -115,6 +115,23 @@ cat /tmp/1res/camera_pretext_transfer_gate/camera_eval/correct_48_paraphrased.js
 
 如果 step 24 更好，后续命令把 `CAMERA_CHECKPOINT_STEP=48` 改为 `24`。如果 24 到 48 仍明显上升但尚未稳定，只在看完指标后决定是否补到 96 步，不预先盲跑第二轮。
 
+### 4.1 24→48 仍上升时的唯一 96 步复核
+
+2026-07-13 的实际结果满足“correct 语义指标继续上升、correct 与 shuffled 差距扩大”，但尚未达到阶段一门槛。因此只允许 correct/shuffled 从各自 step 48 再补相同 48 步。续训同时监督 chat template 的 assistant 结束标记，以修复首轮只监督 camera tag 内容造成的停止格式退化；标签内容和两分支公平性不变。
+
+```bash
+STAGE=continue_correct_96 bash "$RUN"
+STAGE=continue_shuffled_96 bash "$RUN"
+
+STAGE=infer_camera_correct_96 bash "$RUN"
+STAGE=infer_camera_shuffled_96 bash "$RUN"
+STAGE=eval_stage1_96 bash "$RUN"
+
+cat /tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_gate_step_96.json
+```
+
+这里的 `96` 表示累计 camera SFT 更新步数约为 96；第二段重新初始化 optimizer 和 48 步 cosine scheduler，因此它是低成本续训 gate，不冒充一次连续 optimizer-state 的正式 96 步训练。若该 gate 通过，正式复现实验再从初始模型用修正后的结束标记监督连续训练 96 步；若仍未通过，停止本路线。
+
 ### 5. 阶段二训练、推理与验收
 
 只有阶段一通过才执行。以下示例选择 step 48：

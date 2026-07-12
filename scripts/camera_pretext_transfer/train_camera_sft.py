@@ -14,7 +14,7 @@ import torch.distributed as dist
 
 from scripts.camera_pretext_transfer.runtime import prepare_sft_batch
 from scripts.caspr_gate1.runtime import (
-    attach_new_lora, cleanup_distributed, init_distributed, load_model, load_processor,
+    attach_adapter, attach_new_lora, cleanup_distributed, init_distributed, load_model, load_processor,
     next_record, read_jsonl, set_seed, write_json,
 )
 
@@ -24,6 +24,10 @@ LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path", required=True)
+    parser.add_argument(
+        "--initial-adapter-path",
+        help="Optional camera LoRA to continue training with the same camera objective.",
+    )
     parser.add_argument("--train-jsonl", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--max-steps", type=int, default=48)
@@ -66,7 +70,10 @@ def main() -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
     processor = load_processor(args.model_path)
     model = load_model(args.model_path, args.attn_implementation, torch.bfloat16)
-    model = attach_new_lora(model, args.lora_rank, args.lora_alpha, args.lora_dropout, LORA_TARGETS)
+    if args.initial_adapter_path:
+        model = attach_adapter(model, args.initial_adapter_path, is_trainable=True)
+    else:
+        model = attach_new_lora(model, args.lora_rank, args.lora_alpha, args.lora_dropout, LORA_TARGETS)
     if hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()
     if hasattr(model, "gradient_checkpointing_enable"):
@@ -123,7 +130,7 @@ def main() -> None:
             if rank == 0:
                 save_adapter(model, processor, output_dir / f"checkpoint-{step + 1}", {
                     "step": step + 1, "base_model": args.model_path, "train_jsonl": args.train_jsonl,
-                    "world_size": world_size,
+                    "world_size": world_size, "initial_adapter_path": args.initial_adapter_path,
                 })
             if world_size > 1:
                 dist.barrier()
@@ -132,6 +139,7 @@ def main() -> None:
     if rank == 0:
         state = {
             "base_model": args.model_path, "train_jsonl": args.train_jsonl,
+            "initial_adapter_path": args.initial_adapter_path,
             "num_train_records": len(rows), "max_steps": args.max_steps, "world_size": world_size,
             "effective_records_seen": args.max_steps * world_size,
             "elapsed_seconds": time.time() - started,
