@@ -21,6 +21,7 @@ from scripts.caspr_gate1.runtime import (
 
 
 VIDEO_TOKEN_RE = re.compile(r"<video>")
+QWEN3_VIDEO_MIN_PIXELS = 4 * 32 * 32
 YES_CANDIDATE = "Yes"
 NO_CANDIDATE = "No"
 
@@ -71,6 +72,7 @@ def structured_messages(
                     "type": "video",
                     "video": video_path,
                     "fps": float(video_fps),
+                    "min_pixels": min(QWEN3_VIDEO_MIN_PIXELS, int(video_max_pixels)),
                     "max_pixels": int(video_max_pixels),
                 }
             )

@@ -9,9 +9,24 @@ from scripts.camera_binary_vqa.build_data import (
 )
 from scripts.camera_binary_vqa.evaluate import binary_metrics, evaluate_condition
 from scripts.camera_binary_vqa.monitor_gpu_utilization import summarize_window
+from scripts.camera_binary_vqa.runtime import structured_messages
 
 
 class CameraBinaryVqaDataTests(unittest.TestCase):
+    def test_native_video_pixels_have_valid_qwen3_bounds(self) -> None:
+        messages = structured_messages(
+            {
+                "messages": [{"role": "user", "content": "<video>Question"}],
+                "videos": ["/videos/example.mp4"],
+            },
+            video_max_pixels=16384,
+            video_fps=8.0,
+        )
+        video = messages[0]["content"][0]
+        self.assertEqual(video["min_pixels"], 4096)
+        self.assertEqual(video["max_pixels"], 16384)
+        self.assertLessEqual(video["min_pixels"], video["max_pixels"])
+
     def test_balanced_pairs_and_controls(self) -> None:
         rows = [
             {
