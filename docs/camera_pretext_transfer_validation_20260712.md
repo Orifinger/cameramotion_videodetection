@@ -150,6 +150,29 @@ cat /tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_clean_4epoch_curve
 
 旧的 `continue_*_96` 命令仅保留用于复现历史决策过程，不再作为当前正式执行路径。
 
+### 4.3 多数类与视觉依赖审计
+
+四轮自动汇总首次在 step 96 通过，但 correct 的普通 motion bucket accuracy 与开发集 `195/321` 的多数类比例精确一致，原“not collapsed”检查不足。阶段二前必须用现有预测重新计算 bucket balanced accuracy、预测 bucket 数量和混淆矩阵，并让同一个 correct-96 模型对照正确帧与一一置换后的错误帧。置换会最大化 donor/gold motion bucket 不同，同时每个 donor 只使用一次。
+
+更新评测代码后，先重新汇总已有八组预测，不需要重新推理：
+
+```bash
+STAGE=eval_stage1_clean_4epoch bash "$RUN"
+cat /tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_clean_4epoch_curve.json
+```
+
+随后执行唯一一组额外推理：
+
+```bash
+STAGE=build_stage1_visual_control bash "$RUN"
+VISUAL_CONTROL_STEP=96 STAGE=infer_stage1_visual_control bash "$RUN"
+VISUAL_CONTROL_STEP=96 STAGE=eval_stage1_visual_control bash "$RUN"
+
+cat /tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_visual_dependency_step_96.json
+```
+
+视觉依赖审计要求：匹配帧 bucket balanced accuracy 至少 45% 且预测覆盖三个 bucket；置换帧后 micro-F1 至少下降 5 点、macro-F1 至少下降 3 点、bucket balanced accuracy 至少下降 10 点。未通过则把原自动 `passed` 更正为先验/多数类塌缩，不进入阶段二。
+
 ### 5. 阶段二训练、推理与验收
 
 只有阶段一通过才执行。以下示例选择 step 48：

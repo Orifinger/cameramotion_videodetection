@@ -14,7 +14,7 @@ FAKE_CANDIDATE = " Fake"
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    with Path(path).open("r", encoding="utf-8") as handle:
+    with Path(path).open("r", encoding="utf-8-sig") as handle:
         for line_number, line in enumerate(handle, 1):
             if not line.strip():
                 continue

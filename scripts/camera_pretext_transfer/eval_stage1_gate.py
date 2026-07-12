@@ -20,7 +20,9 @@ def load_metrics(path: str | Path) -> dict[str, Any]:
 def compact(metrics: Mapping[str, Any]) -> dict[str, Any]:
     keys = (
         "num_gold", "num_matched", "coverage", "format_valid_rate", "exact_set_accuracy",
-        "coarse_motion_bucket_accuracy", "micro_f1", "macro_f1_supported_labels",
+        "coarse_motion_bucket_accuracy", "coarse_motion_bucket_balanced_accuracy",
+        "num_predicted_motion_buckets", "gold_motion_bucket_counts",
+        "predicted_motion_bucket_counts", "micro_f1", "macro_f1_supported_labels",
     )
     return {key: metrics[key] for key in keys}
 
@@ -35,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-format-valid", type=float, default=0.95)
     parser.add_argument("--min-macro-f1-delta", type=float, default=0.10)
     parser.add_argument("--min-coarse-bucket-accuracy", type=float, default=0.50)
+    parser.add_argument("--min-coarse-bucket-balanced-accuracy", type=float, default=0.45)
+    parser.add_argument("--min-predicted-motion-buckets", type=int, default=3)
     return parser.parse_args()
 
 
@@ -57,6 +61,10 @@ def main() -> None:
         "macro_f1_beats_shuffled": deltas["correct_minus_shuffled_macro_f1"] >= args.min_macro_f1_delta,
         "coarse_bucket_not_collapsed": float(correct["coarse_motion_bucket_accuracy"])
         >= args.min_coarse_bucket_accuracy,
+        "coarse_bucket_balanced_accuracy": float(correct["coarse_motion_bucket_balanced_accuracy"])
+        >= args.min_coarse_bucket_balanced_accuracy,
+        "all_motion_buckets_predicted": int(correct["num_predicted_motion_buckets"])
+        >= args.min_predicted_motion_buckets,
     }
     passed = all(checks.values())
     summary = {
@@ -71,6 +79,8 @@ def main() -> None:
             "min_format_valid": args.min_format_valid,
             "min_macro_f1_delta": args.min_macro_f1_delta,
             "min_coarse_bucket_accuracy": args.min_coarse_bucket_accuracy,
+            "min_coarse_bucket_balanced_accuracy": args.min_coarse_bucket_balanced_accuracy,
+            "min_predicted_motion_buckets": args.min_predicted_motion_buckets,
         },
         "checks": checks,
         "base": compact(base),

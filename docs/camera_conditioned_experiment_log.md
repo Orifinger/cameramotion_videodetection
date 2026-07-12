@@ -17,7 +17,7 @@
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
 | 2026-07-12 | 相机分层同源配对独立判别最小验证 | 未通过，当前配对排序配方停止 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | Pair margin 被优化但 AUC 仅增 0.46 点、pair accuracy 仅增 1.56 点、复杂运动 AUC 仅增 0.27 点，bootstrap 跨 0；不进入 VIF 与 camera pretext |
-| 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 48 步阶段一未通过，干净四轮曲线待执行 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 48 步约为一轮且 correct 尚未平台；从初始模型干净训练到最多 192 步，按 48/96/144/192 最早达标规则验收 |
+| 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 四轮自动门通过，视觉依赖审计待补，结论不足 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 自动规则最早在 step 96 通过，但 bucket ACC 与 195/321 多数类比例完全一致；补 balanced accuracy、预测分布和打乱帧审计前不进入阶段二 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -798,7 +798,7 @@ Smoke 的 DataA pair step 为 loss 1.4200、binary loss 1.2252、pair loss 0.974
 ### 状态与日期
 
 - 日期：2026-07-12。
-- 状态：`48 步阶段一未通过；训练不足与最终不可迁移之间结论不足，待执行干净四轮学习曲线`。
+- 状态：`干净四轮自动门在 step 96 通过；发现多数类塌缩风险，视觉依赖审计前仍为结论不足`。
 - 执行说明：`docs/camera_pretext_transfer_validation_20260712.md`。
 
 ### 模型与数据
@@ -866,6 +866,23 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 同时记录一个训练实现更正：首轮 SFT 只监督 `<camera_motion>...</camera_motion>` 内容，没有把 chat template 的 assistant 结束标记纳入 loss，这与 step 24→48 格式有效率下降一致。2026-07-13 起，correct 与 shuffled 续训均以相同方式监督目标之后的 assistant 结束标记；这是格式终止监督修复，不改变 camera 标签内容。为保持历史可追溯，以上 24/48 原始结果不覆盖。
 
 2026-07-13 方案更正：不再把“累计 96 步的分段续训”作为最终阶段一判断，改为 correct/shuffled 均从原始 detection checkpoint 使用修正后的结束标记监督，连续训练固定最多 192 steps，并在 48/96/144/192 保存。更正原因是按约 750 条训练视频、16 GPU、每卡 batch 1 计算，48 steps 已约等于一个 epoch；旧结果说明一轮未达标但 correct 仍未平台，固定观察到四轮比把两轮当作理论学习上限更合理。选择规则预先固定为“最早通过全部检查的 checkpoint”，四轮均不过即停止，避免继续追加 epoch 或事后挑最高点。旧的 96 步分段续训说明保留为历史过程，但不再执行。
+
+### 2026-07-13 干净四轮学习曲线结果
+
+结果来源：`/tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_clean_4epoch_curve.json`。321 个开发 case 在所有 checkpoint 上均完整匹配。
+
+| 累计 step / 约 epoch | 自动状态 | Correct 格式 | Correct Exact set | Correct bucket ACC | Correct Micro-F1 | Correct Macro-F1 | Correct-Shuffled Macro-F1 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 48 / 1 | 未通过 | 96.88% | 0.31% | 60.75% | 42.81% | 20.80% | +8.92 点 |
+| 96 / 2 | 自动通过 | 99.07% | 2.49% | 60.75% | 49.68% | 21.42% | +12.67 点 |
+| 144 / 3 | 自动通过 | 99.38% | 3.12% | 60.44% | 49.13% | 21.93% | +13.57 点 |
+| 192 / 4 | 自动通过 | 99.38% | 3.12% | 60.44% | 50.48% | 22.00% | +13.52 点 |
+
+按原自动规则，最早通过 checkpoint 为 correct step 96。结束标记监督修复后格式率恢复到 99% 左右，correct 相对错误语义置换训练的 micro/macro-F1 差距也明显扩大，说明训练目标内容产生了差异。
+
+结论标记：`结论不足，暂不进入阶段二`。Correct 的 bucket accuracy 在 step 48/96 精确为 `195/321=60.7477%`，step 144/192 也只差一个样本；该恒定值强烈提示模型可能始终输出开发集多数 motion bucket。当前自动门只要求普通 bucket accuracy ≥50%，没有检查 balanced accuracy、预测 bucket 覆盖或混淆矩阵，因此“coarse bucket not collapsed”检查不充分。此外，固定语义置换会改变标签名边缘先验，correct 优于 shuffled-training 不能单独证明预测依赖视频内容。
+
+2026-07-13 审计更正：保留原自动 `passed` 输出作为历史结果，但在补充以下两项后才决定阶段一是否真正通过：一是报告 bucket balanced accuracy、gold/pred bucket 分布和混淆矩阵；二是对同一个 correct step-96 模型比较正确视频帧与最大化 bucket 错配的帧置换输入。该复核只复用现有 checkpoint 和预测，不重新训练；原因是排除标签先验和多数类塌缩，而不是追加试参。
 
 ## 记录维护说明
 

@@ -73,6 +73,26 @@ class CameraPretextRuntimeTests(unittest.TestCase):
         self.assertEqual(metrics["micro_f1"], 1.0)
         self.assertEqual(metrics["macro_f1_supported_labels"], 1.0)
         self.assertEqual(metrics["coarse_motion_bucket_accuracy"], 1.0)
+        self.assertEqual(metrics["coarse_motion_bucket_balanced_accuracy"], 1.0)
+        self.assertEqual(metrics["num_predicted_motion_buckets"], 2)
+
+    def test_bucket_balanced_accuracy_exposes_majority_collapse(self) -> None:
+        gold = [
+            {"case_id": "a", "camera_labels": ["complex-motion"]},
+            {"case_id": "b", "camera_labels": ["complex-motion"]},
+            {"case_id": "c", "camera_labels": ["minor-motion"]},
+            {"case_id": "d", "camera_labels": ["no-motion"]},
+        ]
+        predictions = [
+            {"case_id": row["case_id"], "response": '<camera_motion>["complex-motion"]</camera_motion>'}
+            for row in gold
+        ]
+        metrics = multilabel_metrics(
+            gold, predictions, ["complex-motion", "minor-motion", "no-motion"]
+        )
+        self.assertEqual(metrics["coarse_motion_bucket_accuracy"], 0.5)
+        self.assertAlmostEqual(metrics["coarse_motion_bucket_balanced_accuracy"], 1 / 3)
+        self.assertEqual(metrics["num_predicted_motion_buckets"], 1)
 
 
 if __name__ == "__main__":

@@ -113,6 +113,11 @@ def multilabel_metrics(
     matched = 0
     parse_reasons: Counter[str] = Counter()
     motion_labels = ("complex-motion", "minor-motion", "no-motion")
+    gold_bucket_counts: Counter[str] = Counter()
+    predicted_bucket_counts: Counter[str] = Counter()
+    bucket_confusion: dict[str, Counter[str]] = {
+        label: Counter() for label in (*motion_labels, "unknown")
+    }
 
     def bucket(labels: Sequence[str]) -> str:
         for label in motion_labels:
@@ -132,7 +137,12 @@ def multilabel_metrics(
         expected = set(gold.get("camera_labels", []))
         format_valid += int(parsed["format_valid"])
         exact += int(predicted == expected and parsed["format_valid"])
-        bucket_correct += int(bucket(predicted) == bucket(expected) and parsed["format_valid"])
+        gold_bucket = bucket(expected)
+        predicted_bucket = bucket(predicted) if parsed["format_valid"] else "unknown"
+        gold_bucket_counts[gold_bucket] += 1
+        predicted_bucket_counts[predicted_bucket] += 1
+        bucket_confusion.setdefault(gold_bucket, Counter())[predicted_bucket] += 1
+        bucket_correct += int(predicted_bucket == gold_bucket)
         for label in allowed_labels:
             present_gold = label in expected
             present_pred = label in predicted
@@ -163,6 +173,14 @@ def multilabel_metrics(
         if micro_precision + micro_recall else 0.0
     )
     total = len(gold_rows)
+    supported_buckets = [label for label in motion_labels if gold_bucket_counts[label] > 0]
+    bucket_recalls = {
+        label: (
+            bucket_confusion[label][label] / gold_bucket_counts[label]
+            if gold_bucket_counts[label] else 0.0
+        )
+        for label in supported_buckets
+    }
     return {
         "num_gold": total,
         "num_predictions": len(prediction_rows),
@@ -171,6 +189,16 @@ def multilabel_metrics(
         "format_valid_rate": format_valid / total if total else 0.0,
         "exact_set_accuracy": exact / total if total else 0.0,
         "coarse_motion_bucket_accuracy": bucket_correct / total if total else 0.0,
+        "coarse_motion_bucket_balanced_accuracy": (
+            sum(bucket_recalls.values()) / len(bucket_recalls) if bucket_recalls else 0.0
+        ),
+        "coarse_motion_bucket_recall": bucket_recalls,
+        "gold_motion_bucket_counts": dict(gold_bucket_counts),
+        "predicted_motion_bucket_counts": dict(predicted_bucket_counts),
+        "num_predicted_motion_buckets": sum(predicted_bucket_counts[label] > 0 for label in motion_labels),
+        "motion_bucket_confusion": {
+            gold: dict(counts) for gold, counts in bucket_confusion.items() if counts
+        },
         "micro_f1": micro_f1,
         "macro_f1_supported_labels": sum(supported_f1) / len(supported_f1) if supported_f1 else 0.0,
         "num_supported_labels": len(supported_f1),

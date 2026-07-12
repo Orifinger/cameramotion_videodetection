@@ -17,6 +17,7 @@ MAX_PIXELS="${MAX_PIXELS:-262144}"
 CAMERA_STEPS="${CAMERA_STEPS:-48}"
 CAMERA_SAVE_STEPS="${CAMERA_SAVE_STEPS:-24}"
 CAMERA_CHECKPOINT_STEP="${CAMERA_CHECKPOINT_STEP:-48}"
+VISUAL_CONTROL_STEP="${VISUAL_CONTROL_STEP:-96}"
 CHECK_IMAGES="${CHECK_IMAGES:-1}"
 
 DATAA_DETECTION_JSON="${DATAA_DETECTION_JSON:-${PROJECT_ROOT}/res/dataA_v1/autolabel/dataa_vace_grounded_cot_40step_v3_sft_clean.json}"
@@ -26,6 +27,7 @@ CAMERA_TRAIN_CORRECT="${DATA_DIR}/camera_train_correct.jsonl"
 CAMERA_TRAIN_SHUFFLED="${DATA_DIR}/camera_train_shuffled.jsonl"
 CAMERA_DEV_CANONICAL="${DATA_DIR}/camera_dev_canonical.jsonl"
 CAMERA_DEV_PARAPHRASED="${DATA_DIR}/camera_dev_paraphrased.jsonl"
+CAMERA_DEV_SHUFFLED_FRAMES="${DATA_DIR}/camera_dev_shuffled_frames.jsonl"
 TRAIN_PAIRS="${CASPR_ROOT}/data/dataa_train_pairs_256.jsonl"
 DATAB_REPLAY="${CASPR_ROOT}/data/datab_replay_512.jsonl"
 DEV_PAIRS="${CASPR_ROOT}/data/dataa_dev_pairs.jsonl"
@@ -238,6 +240,7 @@ case "${STAGE}" in
     ;;
   eval_stage1_clean_4epoch)
     mkdir -p "${CAMERA_EVAL_ROOT}"
+    eval_camera_one base "${CAMERA_DEV_CANONICAL}"
     for step in 48 96 144 192; do
       eval_camera_one "correct_clean_${step}" "${CAMERA_DEV_CANONICAL}"
       eval_camera_one "shuffled_clean_${step}" "${CAMERA_DEV_CANONICAL}"
@@ -250,6 +253,28 @@ case "${STAGE}" in
     "${PYTHON_BIN}" -m scripts.camera_pretext_transfer.summarize_stage1_curve \
       --eval-dir "${CAMERA_EVAL_ROOT}" \
       --output-json "${CAMERA_EVAL_ROOT}/stage1_clean_4epoch_curve.json"
+    ;;
+  build_stage1_visual_control)
+    "${PYTHON_BIN}" -m scripts.camera_pretext_transfer.build_shuffled_frame_eval \
+      --canonical-dev-jsonl "${CAMERA_DEV_CANONICAL}" \
+      --output-jsonl "${CAMERA_DEV_SHUFFLED_FRAMES}" \
+      --summary-json "${DATA_DIR}/camera_dev_shuffled_frames_summary.json"
+    ;;
+  infer_stage1_visual_control)
+    infer_camera "correct_clean_${VISUAL_CONTROL_STEP}_shuffled_frames" \
+      "${CAMERA_ROOT}/correct_clean_4epoch/checkpoint-${VISUAL_CONTROL_STEP}" \
+      "${CAMERA_DEV_SHUFFLED_FRAMES}"
+    ;;
+  eval_stage1_visual_control)
+    eval_camera_one "correct_clean_${VISUAL_CONTROL_STEP}" "${CAMERA_DEV_CANONICAL}"
+    eval_camera_one "correct_clean_${VISUAL_CONTROL_STEP}_shuffled_frames" \
+      "${CAMERA_DEV_SHUFFLED_FRAMES}"
+    "${PYTHON_BIN}" -m scripts.camera_pretext_transfer.eval_visual_dependency \
+      --matched-summary "${CAMERA_EVAL_ROOT}/correct_clean_${VISUAL_CONTROL_STEP}.json" \
+      --shuffled-frame-summary \
+        "${CAMERA_EVAL_ROOT}/correct_clean_${VISUAL_CONTROL_STEP}_shuffled_frames.json" \
+      --frame-control-summary "${DATA_DIR}/camera_dev_shuffled_frames_summary.json" \
+      --output-json "${CAMERA_EVAL_ROOT}/stage1_visual_dependency_step_${VISUAL_CONTROL_STEP}.json"
     ;;
   continue_correct_96)
     CAMERA_STEPS=48 train_camera correct_96 "${CAMERA_TRAIN_CORRECT}" \
