@@ -11,6 +11,7 @@ import numpy as np
 
 from scripts.camera_flow_probe.contracts import RunSpec, build_probe_manifest
 from scripts.camera_flow_probe.metrics import roc_auc
+from scripts.camera_flow_probe.select_manifest import select_rows
 
 try:
     import cv2  # noqa: F401
@@ -177,6 +178,23 @@ class CameraMetricTests(unittest.TestCase):
     def test_auc_with_ties(self) -> None:
         self.assertAlmostEqual(roc_auc([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9]), 1.0)
         self.assertAlmostEqual(roc_auc([0, 1], [0.5, 0.5]), 0.5)
+
+    def test_smoke_selection_covers_source_motion_cells(self) -> None:
+        rows = [
+            {
+                "case_id": f"case_{source}_{motion}_{index}",
+                "dataset_split": "train",
+                "source_name": source,
+                "motion_bucket": motion,
+            }
+            for source in ("source_a", "source_b")
+            for motion in ("no-motion", "complex-motion")
+            for index in range(3)
+        ]
+        selected, summary = select_rows(rows, split="train", per_source_motion=1)
+        self.assertEqual(len(selected), 4)
+        self.assertEqual(summary["by_source"], {"source_a": 2, "source_b": 2})
+        self.assertEqual(summary["by_motion_bucket"], {"complex-motion": 2, "no-motion": 2})
 
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")

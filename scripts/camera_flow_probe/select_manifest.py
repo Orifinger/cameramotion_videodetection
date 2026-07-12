@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select a deterministic motion-balanced subset of a probe manifest."""
+"""Select a deterministic source-and-motion-balanced probe subset."""
 
 from __future__ import annotations
 
@@ -21,33 +21,58 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--manifest-jsonl", type=Path, required=True)
     parser.add_argument("--out-jsonl", type=Path, required=True)
     parser.add_argument("--split", choices=("train", "test", "all"), default="train")
-    parser.add_argument("--per-motion-bucket", type=int, default=2)
+    parser.add_argument("--per-source-motion", type=int, default=1)
     return parser.parse_args(argv)
+
+
+def select_rows(
+    rows: Sequence[dict[str, Any]],
+    *,
+    split: str,
+    per_source_motion: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    filtered = sorted(rows, key=lambda row: str(row["case_id"]))
+    if split != "all":
+        filtered = [row for row in filtered if row.get("dataset_split") == split]
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    by_source: dict[str, int] = defaultdict(int)
+    by_motion: dict[str, int] = defaultdict(int)
+    limit = max(1, per_source_motion)
+    for row in filtered:
+        key = (
+            str(row.get("source_name", "unknown-source")),
+            str(row.get("motion_bucket", "unknown")),
+        )
+        groups[key].append(row)
+    selected: list[dict[str, Any]] = []
+    by_source_motion: dict[str, int] = {}
+    for (source, motion), values in sorted(groups.items()):
+        chosen = values[:limit]
+        selected.extend(chosen)
+        by_source[source] += len(chosen)
+        by_motion[motion] += len(chosen)
+        by_source_motion[f"{source}|{motion}"] = len(chosen)
+    return selected, {
+        "case_count": len(selected),
+        "by_source": dict(sorted(by_source.items())),
+        "by_motion_bucket": dict(sorted(by_motion.items())),
+        "by_source_motion": by_source_motion,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    rows = sorted(read_jsonl(args.manifest_jsonl), key=lambda row: str(row["case_id"]))
-    if args.split != "all":
-        rows = [row for row in rows if row.get("dataset_split") == args.split]
-    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        groups[str(row.get("motion_bucket", "unknown"))].append(row)
-    selected = [
-        row
-        for bucket in sorted(groups)
-        for row in groups[bucket][: max(1, args.per_motion_bucket)]
-    ]
+    selected, summary = select_rows(
+        read_jsonl(args.manifest_jsonl),
+        split=args.split,
+        per_source_motion=args.per_source_motion,
+    )
     write_jsonl(args.out_jsonl, selected)
     print(
         json.dumps(
             {
                 "out_jsonl": str(args.out_jsonl),
-                "case_count": len(selected),
-                "by_motion_bucket": {
-                    bucket: min(len(values), max(1, args.per_motion_bucket))
-                    for bucket, values in sorted(groups.items())
-                },
+                **summary,
             },
             ensure_ascii=False,
             indent=2,

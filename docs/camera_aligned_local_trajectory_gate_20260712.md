@@ -91,7 +91,7 @@ bash scripts/camera_flow_probe/run_camera_flow_probe.sh preflight
 - 原视频、mask NPZ 和 case manifest 全部可读；
 - RAFT、DINOv2、SEA-RAFT 离线权重都可解析。
 
-随后只跑每个 motion bucket 两个 train case：
+随后按每个“最终视频来源 × motion bucket”抽取一个 train case，最多 9 个，确保旧 VACE-14B 和两类新 VACE-1.3B 40-step 都经过实际 GPU 前向：
 
 ```bash
 bash scripts/camera_flow_probe/run_camera_flow_probe.sh smoke

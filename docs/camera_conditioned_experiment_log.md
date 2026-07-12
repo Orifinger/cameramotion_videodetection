@@ -15,7 +15,7 @@
 | 2026-07-10 | 普通 DataB 续训与相机文本 DataB 续训 | 未通过 | 经过匹配提示格式训练后，模型是否真正利用正确相机描述改善检测 | 正确相机描述不优于错误描述，并低于不提供相机描述；当前文本条件注入路线未学会利用相机内容 |
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
-| 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 待运行 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 已锁定 40step_v3 数据契约和三组对照；先跑离线权重、mask 时间映射及少量 case smoke，未通过前不进入 DataB、Qwen 或 RL |
+| 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 分层 smoke 待复核 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 数据/权重预检通过；首轮 6-case GPU smoke 数值通过但全是旧 VACE-14B，尚未覆盖新 VACE-1.3B 40-step，修正分层抽样后再决定是否全量提取 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -480,7 +480,7 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 ### 状态与日期
 
 - 日期：2026-07-12。
-- 状态：`待运行`，代码与执行契约已开始实施，尚无实验结果。
+- 状态：数据和权重预检 `通过`；首轮 GPU smoke 为 `结论不足`，等待覆盖三类最终视频来源的分层复核。
 - 完整执行说明：`docs/camera_aligned_local_trajectory_gate_20260712.md`。
 
 ### 模型与数据
@@ -523,9 +523,36 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 - 第一轮不测试 SEA-RAFT 对 RAFT 的替换收益，不测试 Qwen、DataB、SFT、DPO 或 GRPO。
 - 未通过前不扩展训练；通过后下一步才是 DataB 弱监督迁移和 Qwen 局部证据注入。
 
+### 2026-07-12 数据/权重预检与首轮 GPU smoke
+
+结果来源：
+
+- manifest summary：`/tmp/1res/camera_flow_probe_40step_v3/data/dataa_camera_flow_probe_manifest_40step_v3_summary.json`；
+- 权重预检：`/tmp/1res/camera_flow_probe_40step_v3/weight_preflight.json`；
+- smoke 提取审计：`/tmp/1res/camera_flow_probe_40step_v3/smoke/extraction_audit.json`；
+- smoke 可视化：`/tmp/1res/camera_flow_probe_40step_v3/smoke/visualizations/`。
+
+严格 manifest 和三个离线权重全部通过。最终数据为 1080 cases，来源数量分别为 198、714、168；train/test 为 759/321；camera 标签无缺失，旧 test case 均存在于新记录中。
+
+| 首轮 smoke 指标 | 结果 | 验收线 |
+|---|---:|---:|
+| 有效 feature cases | 6/6，100% | ≥95% |
+| 可映射出正 mask patch 的 cases | 6/6，100% | ≥90% |
+| 相机拟合 inlier rate 中位数 | 94.25% | ≥50% |
+| 相机拟合 inlier rate P10 | 58.25% | - |
+| Real/Fake 相机角点差异中位数/图像对角线 | 0.0701% | ≤2% |
+| Real/Fake 相机角点差异 P90/图像对角线 | 0.2337% | - |
+| 非有限 feature 文件 | 0 | 0 |
+
+6 个 case 的 GPU 前向全部成功，首个包含模型初始化耗时 24.0 秒，随后单 case 为 2.6 至 4.7 秒。三个 motion bucket 的拟合质量均通过，说明 TorchVision RAFT、DINOv2、本地权重加载、原视频采样和精确 mask 时间映射在这些样本上可以执行。
+
+但审计中的 `source_counts` 只有 `vace14b_reused: 6`。这次没有实际读取新生成的 714 个 dataset 40-step 或 168 个 textedit 40-step case，因此不能建立“完整 40step_v3 数据链路已经通过”。它也没有训练三组 MLP，不能说明相机补偿已经改善检测。
+
+结论标记：`结论不足`。数据/权重预检本身为 `通过`；首轮 smoke 仅建立旧 VACE-14B 上的工程与几何可执行性。已于 2026-07-12 修正 smoke 选择规则为每个“最终视频来源 × motion bucket”取 1 个 train case，修正原因是原规则只按 motion 排序抽样，意外被 case id 更靠前的 VACE-14B 占满。
+
 ### 立即下一步
 
-先在服务器执行严格 manifest/权重预检，再对每个 motion bucket 两个 train case 跑 GPU smoke。smoke 输出和 mask 映射审计通过后才运行 16 卡全量特征提取。
+拉取修正代码后重新执行 smoke，确认输出的 `by_source` 同时包含 `vace14b_reused`、`vace13b_dataset_40step_v3` 和 `vace13b_textedit_40step_v3`。分层 smoke 数值和可视化均通过后，才运行 16 卡全量特征提取。
 
 
 ## 记录维护说明

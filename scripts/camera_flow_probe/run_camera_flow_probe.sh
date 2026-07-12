@@ -52,7 +52,7 @@ case "${MODE}" in
       --manifest-jsonl "${MANIFEST}" \
       --out-jsonl "${SMOKE_MANIFEST}" \
       --split train \
-      --per-motion-bucket 2
+      --per-source-motion 1
     torchrun --standalone --nproc-per-node=1 \
       -m scripts.camera_flow_probe.extract_features \
       --manifest-jsonl "${SMOKE_MANIFEST}" \
@@ -73,7 +73,7 @@ case "${MODE}" in
       --output-dir "${OUT}/smoke/visualizations" \
       --raft-checkpoint "${RAFT_CHECKPOINT}" \
       --target-fps 8 \
-      --max-cases 6
+      --max-cases 12
     ;;
   extract)
     test -f "${MANIFEST}" || build_manifest
