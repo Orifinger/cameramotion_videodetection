@@ -899,6 +899,16 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 
 结论标记：`未通过`。原普通 accuracy 门的 `passed` 已被多数类审计推翻；历史输出保留，不静默覆盖。当前 camera-label SFT 前置路线正式停止，不运行打乱帧额外 GPU 推理、不执行阶段二 pair-rank 检测迁移，也不追加 epoch、prompt 复制、DPO 或 GRPO。打乱帧工具代码保留，但因为绝对 balanced accuracy 门已经失败，无需继续消耗算力证明视觉依赖。
 
+### 2026-07-13 根因分析与结论边界
+
+完整分析见 `docs/camera_pretext_failure_analysis_20260713.md`。对 CameraBench 论文、官方发布模型元数据和本地获批训练 JSON 的复核表明，本轮并未复现 CameraBench 的训练任务：CameraBench 将每个 primitive 分解成大规模、显式正负的 binary VQA，并用候选答案概率/AP 与配对 Q-Acc 评测；本轮只给每个视频一条完整稀疏标签集，用低学习率 rank-32 LoRA 做 token-level SFT。CameraBench 本地 processed files 有 38,672 条 balanced VQA、35,050 条 prompt-augmented captions 和 157,552 条 raw VQA，而本轮每轮只有约 750 条目标。官方主结果使用 full LM、8 FPS、LR `2e-5`；其 LoRA 对照也是 rank 64、LR `2e-4`。
+
+因此本轮失败的合理解释是：完整标签集生成缺少逐标签负监督，类别不平衡促使模型学习高频标签先验；低容量、低学习率 LoRA、16 张离散图片以及 detection-specialized 起点进一步放大问题。干净四轮 train/inference prompt 与输入处理一致，结束标记也已修复，所以最终塌缩不再归因于明显的提示词或 adapter 工程错误。
+
+结论边界更正为：停止的是“每视频一条完整 camera-label list 的低学习率 LoRA 前置学习”，不是整个 camera motion 方向。该结果不能证明 MLLM 学不会 camera，也不能证明 camera 对 AIGC 检测无用；下一步若继续，必须先用 balanced binary VQA、正确视频对 shuffled/no-video、candidate-level AP/Q-Acc 完成相机能力复现，再讨论联合检测迁移。
+
+2026-07-13 算术更正：此前把 `60.7477%=195/321` 描述为开发集多数类比例，这是错误的；它实际是 bucket 判对数量。Gold 分布为 complex-motion `213/321=66.36%`、no-motion `61/321`、minor-motion `47/321`。更正不改变多数类塌缩结论，因为 correct-96 将 `279/321` 条预测为 complex，balanced accuracy 只有 34.19%；更正原因是区分 gold 先验比例与模型实际判对率。
+
 ## 记录维护说明
 
 - 新实验开始时先在本文件新增中文实验定义和验收标准。
