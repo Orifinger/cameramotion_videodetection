@@ -16,6 +16,7 @@
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
+| 2026-07-12 | 相机分层同源配对独立判别最小验证 | 已立项，待执行 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | 先运行 256 对 DataA、512 条 DataB replay、64 步的 LoRA 对照；DataA 门通过后才测 VIF 保留和 camera pretext |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -698,6 +699,54 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 
 暂停当前几何相机补偿路线，不继续追加试参。下一步重新选择能够把 camera 能力接入 AIGC 检测的主方法时，必须以新的低成本 gate 重新立项；本轮只保留“camera compensation 改善部分 patch 排序但不改善视频检测”的经验事实。
 
+
+## 11. 相机分层同源配对独立判别最小验证
+
+### 这个实验测什么
+
+验证同一 DataA case 的 Real/Fake 视频分别独立计算 `Real/Fake` verdict 分数时，在普通二分类损失上增加 `Fake 分数高于 Real 分数` 的配对 margin，是否能比等数据量、等训练步数的普通二分类续训更好地识别局部编辑视频。
+
+### 状态与日期
+
+- 日期：2026-07-12。
+- 状态：`已立项，待执行`。
+- 完整执行说明：`docs/caspr_gate1_execution_20260712.md`。
+
+### 模型与数据
+
+- 初始模型：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
+- DataA detection：`/input/workflow_58770161/workspace/test/cameramotion_det/res/dataA_v1/autolabel/dataa_vace_grounded_cot_40step_v3_sft_clean.json`。
+- DataA camera labels：`/input/workflow_58770161/workspace/test/cameramotion_det/camera/camerajson/dataa_cameramotion_labels_40step_v3.jsonl`。
+- DataA 训练：从固定 train 身份中按视频来源与 `no-motion/minor-motion/complex-motion` 联合分层选择 256 个完整 Real/Fake pairs。
+- DataA 评估：固定 321 个旧 test 身份。由于它们已被多次用于项目诊断，本实验只称其为开发集，不称为未经使用的最终测试集。
+- DataB replay：从 `v4vif_2766busterall_trainall.json` 选择 512 条 Real/Fake 平衡样本。
+- 泄漏限制：初始 checkpoint 已看过完整 DataB，因此 DataB 不能作为 held-out 测试；本轮只用 VIF-Bench 检查通用检测保留。
+
+### 唯一改变因素
+
+- 普通独立判别续训对照：DataA pair 中两个视频分别计算二分类损失，DataB 计算相同二分类 replay loss。
+- 相机分层同源配对排序方法：数据、prompt、batch、步数和二分类损失完全相同，仅在 DataA pair step 增加权重 0.2、margin 0.5 的 `Fake > Real` score ranking loss。
+- Real/Fake 不放进同一个 A/B prompt；两条序列独立编码，pair 关系只进入 loss。
+- detection prompt 不注入 camera caption、GT bbox 或 GT mask；当前也不使用 RAFT/DINO 特征。
+
+### 主要设置
+
+- Qwen3-VL-8B 的语言层 LoRA rank 32、alpha 64、dropout 0.05；基础权重和视觉塔保持冻结。
+- 16 卡、每卡一个 pair 或一个 replay 样本、梯度累积 1、学习率 `2e-5`。
+- 总计 64 optimizer steps：32 个 DataA pair steps 和 32 个 DataB replay steps 交替执行。
+- 只训练位于 CoT 之前的短 verdict 分数，不让 GT CoT 内容参与真假 score。
+
+### 验收标准
+
+- 相对普通对照，DataA 开发集整体视频 AUC 提升至少 3 个百分点。
+- Pair accuracy 提升至少 5 个百分点。
+- `complex-motion` AUC 提升至少 3 个百分点。
+- 任一 VACE 视频来源的 AUC 下降不超过 2 个百分点。
+- DataA 门通过后，VIF-Bench 相对对照下降不超过 1.5 个百分点。
+
+### 已知限制与下一步
+
+该门只验证配对排序能否接入普通检测，不建立 camera pretext 的独立贡献，也不评价解释文本改善。先执行数据构建和单卡两步 smoke；DataA 与 VIF 保留同时通过后，才运行正确 camera labels、打乱 camera labels 和无 camera pretext 的等算力对照。若配对排序门未通过，则停止当前配方，不启动 camera pretext、DPO 或 GRPO。
 
 ## 记录维护说明
 
