@@ -71,6 +71,7 @@ cd "${ROOT}"
 
 export TEST_SPLIT=${ROOT}/tools/data/camera_motion_splits/dataA_test.json
 export OUT=/tmp/1res/camera_flow_probe_40step_v3
+export META_DIR=${ROOT}/res/camera_flow_probe_40step_v3
 
 bash scripts/camera_flow_probe/run_camera_flow_probe.sh preflight
 ```
@@ -130,9 +131,11 @@ bash scripts/camera_flow_probe/run_camera_flow_probe.sh probe
 核心结果：
 
 ```text
-/tmp/1res/camera_flow_probe_40step_v3/probe/camera_aligned_local_probe_summary.json
-/tmp/1res/camera_flow_probe_40step_v3/probe/camera_aligned_local_probe_predictions.csv
+/input/workflow_58770161/workspace/test/cameramotion_det/res/camera_flow_probe_40step_v3/probe/camera_aligned_local_probe_summary.json
+/input/workflow_58770161/workspace/test/cameramotion_det/res/camera_flow_probe_40step_v3/probe/camera_aligned_local_probe_predictions.csv
 ```
+
+逐 case 特征保存在快速但非持久的 `/tmp/1res/camera_flow_probe_40step_v3/full/features/`。manifest、权重预检、全量 audit、最终探针指标和小型 MLP 权重保存在 NAS 的 `res/camera_flow_probe_40step_v3/`。全量 audit 通过且确认后续要复用特征后，将 `/tmp` 中的大特征目录上传 OSS；smoke 产物不需要备份。
 
 ## 7. 分阶段验收
 

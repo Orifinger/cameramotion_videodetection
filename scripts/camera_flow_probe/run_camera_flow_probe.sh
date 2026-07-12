@@ -5,6 +5,7 @@ MODE=${1:-preflight}
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT=${ROOT:-$(cd -- "${SCRIPT_DIR}/../.." && pwd)}
 OUT=${OUT:-/tmp/1res/camera_flow_probe_40step_v3}
+META_DIR=${META_DIR:-${ROOT}/res/camera_flow_probe_40step_v3}
 
 RECORDS_JSONL=${RECORDS_JSONL:-${ROOT}/res/dataA_v1/autolabel/dataa_vace_grounded_cot_v4_records_40step_v3.jsonl}
 CAMERA_JSONL=${CAMERA_JSONL:-${ROOT}/camera/camerajson/dataa_cameramotion_labels_40step_v3.jsonl}
@@ -14,9 +15,11 @@ DINO_MODEL=${DINO_MODEL:-/home/admin/dinov2-small}
 SEA_RAFT_MODEL=${SEA_RAFT_MODEL:-/home/admin/MemorySlices/Tartan-C-T-TSKH-spring540x960-M}
 NPROC_PER_NODE=${NPROC_PER_NODE:-16}
 
-MANIFEST=${OUT}/data/dataa_camera_flow_probe_manifest_40step_v3.jsonl
-MANIFEST_SUMMARY=${OUT}/data/dataa_camera_flow_probe_manifest_40step_v3_summary.json
+MANIFEST=${META_DIR}/dataa_camera_flow_probe_manifest_40step_v3.jsonl
+MANIFEST_SUMMARY=${META_DIR}/dataa_camera_flow_probe_manifest_40step_v3_summary.json
 FEATURE_ROOT=${OUT}/full
+
+mkdir -p "${META_DIR}"
 
 export PYTHONPATH=${ROOT}${PYTHONPATH:+:${PYTHONPATH}}
 cd "${ROOT}"
@@ -36,7 +39,7 @@ weight_preflight() {
     --raft-checkpoint "${RAFT_CHECKPOINT}" \
     --dinov2-model "${DINO_MODEL}" \
     --sea-raft-model "${SEA_RAFT_MODEL}" \
-    --out-json "${OUT}/weight_preflight.json"
+    --out-json "${META_DIR}/weight_preflight.json"
 }
 
 case "${MODE}" in
@@ -93,12 +96,13 @@ case "${MODE}" in
       --manifest-jsonl "${MANIFEST}" \
       --feature-dir "${FEATURE_ROOT}/features" \
       --out-json "${FEATURE_ROOT}/extraction_audit.json"
+    cp "${FEATURE_ROOT}/extraction_audit.json" "${META_DIR}/full_extraction_audit.json"
     ;;
   probe)
     python -m scripts.camera_flow_probe.train_probe \
       --manifest-jsonl "${MANIFEST}" \
       --feature-dir "${FEATURE_ROOT}/features" \
-      --output-dir "${OUT}/probe" \
+      --output-dir "${META_DIR}/probe" \
       --device cuda:0
     ;;
   *)
