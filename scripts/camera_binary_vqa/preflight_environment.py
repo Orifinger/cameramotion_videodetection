@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tmp-root", type=Path, required=True)
     parser.add_argument("--persistent-root", type=Path, required=True)
     parser.add_argument("--oss-uri", required=True)
+    parser.add_argument("--keepalive-script", type=Path, required=True)
     parser.add_argument("--expected-gpus", type=int, default=16)
     parser.add_argument("--minimum-free-gb", type=float, default=100.0)
     parser.add_argument("--output-json", type=Path, required=True)
@@ -76,6 +77,8 @@ def main() -> None:
         "model_path": args.model_path,
         "model_config": args.model_path / "config.json",
         "manifest_jsonl": args.manifest_jsonl,
+        "keepalive_script": args.keepalive_script,
+        "keepalive_busy_py": args.keepalive_script.parent / "busy.py",
         **{
             f"project_file:{relative}": args.project_root / relative
             for relative in REQUIRED_PROJECT_FILES
@@ -87,6 +90,35 @@ def main() -> None:
         for name, exists in path_status.items()
     }
     checks["required_paths"] = all(path_status.values())
+
+    keepalive_details: dict[str, Any] = {
+        "script": str(args.keepalive_script),
+        "busy_py": str(args.keepalive_script.parent / "busy.py"),
+    }
+    keepalive_syntax_ok = False
+    if args.keepalive_script.is_file() and (args.keepalive_script.parent / "busy.py").is_file():
+        try:
+            bash_result = subprocess.run(
+                ["bash", "-n", str(args.keepalive_script)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            busy_path = args.keepalive_script.parent / "busy.py"
+            compile(busy_path.read_text(encoding="utf-8"), str(busy_path), "exec")
+            keepalive_syntax_ok = bash_result.returncode == 0
+            keepalive_details.update(
+                {
+                    "bash_returncode": bash_result.returncode,
+                    "bash_stderr": bash_result.stderr[-1000:],
+                    "python_syntax": "ok",
+                }
+            )
+        except Exception as exc:
+            keepalive_details["error"] = repr(exc)
+    checks["keepalive_syntax"] = keepalive_syntax_ok
+    details["keepalive"] = keepalive_details
 
     args.tmp_root.mkdir(parents=True, exist_ok=True)
     usage = shutil.disk_usage(args.tmp_root)

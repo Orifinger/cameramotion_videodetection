@@ -23,7 +23,8 @@
 4. 评测第一轮 checkpoint 的正确视频结果。
 5. 评测最终 checkpoint 的正确视频、对立标签视频置换、无视频三种条件。
 6. 汇总 AP、AUC、balanced accuracy、paired question accuracy 和固定 gate。
-7. 小结果复制到 NAS；整个运行目录连同两个 adapter 自动上传 OSS。失败退出也执行归档。
+7. 小结果复制到 NAS；整个运行目录连同 adapter 自动上传 OSS。失败退出也执行归档。
+8. 确认 `COMPLETED`、NAS 归档和最终 OSS 上传全部完成后，以前台方式执行 `/input/training/keep.sh`，持续维持 16 卡负载。
 
 ## 服务器文件
 
@@ -51,6 +52,7 @@
 3. `/tmp` 是否至少有 100 GB 空闲空间，NAS 是否可写，`ossutil64` 是否能读取目标 OSS 前缀。
 4. 16 卡执行一次小矩阵计算和 distributed all-reduce，验证 CUDA 与进程间通信。
 5. 单卡实际读取 2 条原视频并完成 8 FPS candidate scoring，验证模型、processor 和原生视频执行链路。
+6. `/input/training/keep.sh` 与 `/input/training/busy.py` 是否存在，并分别通过 Bash/Python 静态语法检查；预检不会真正启动无限 keepalive。
 
 ```bash
 cd /input/workflow_58770161/workspace/test/cameramotion_det
@@ -122,6 +124,14 @@ bash scripts/camera_binary_vqa/run_unattended.sh
 GPU 利用率只是一项服务器保活监控，不属于实验验收条件，也不会改变任务退出状态或实验结论。若某个窗口低于 30%，摘要只记录 `warning`，用于解释容器被平台回收的风险。
 
 训练会在每个 epoch 保存一个稳定 checkpoint。后台 watcher 每 60 秒检查一次新 checkpoint，并立即执行对应的 `ossutil64 cp -r` 上传；因此即使容器之后因平台问题被回收，已经完成的 epoch adapter 仍保存在 OSS。训练结束后才执行四组模型评测，以避免任务开头长时间停留在可能利用率较低的纯推理阶段。
+
+全部训练、推理和评测结束后，脚本先写入 `COMPLETED`，再完成 NAS 归档和整个运行目录的最终 OSS 上传。只有这些步骤全部成功后才执行：
+
+```bash
+bash /input/training/keep.sh
+```
+
+该命令通过 `exec` 接管原任务进程并持续运行，因此终端不会自行返回，这是预期行为。需要关闭容器或释放 GPU 时再手动终止 keepalive。默认 `KEEP_ALIVE_AFTER_RUN=1`；临时不需要保活时可在正式命令前显式设置为 `0`。
 
 ## 产物位置
 

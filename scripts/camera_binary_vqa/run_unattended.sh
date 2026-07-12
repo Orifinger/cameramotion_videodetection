@@ -13,6 +13,9 @@ RUN_ROOT="${RUN_ROOT:-/tmp/1res/dataa_camera_binary_vqa/${RUN_NAME}}"
 PERSIST_ROOT="${PERSIST_ROOT:-${PROJECT_ROOT}/res/dataa_camera_binary_vqa/${RUN_NAME}}"
 OSS_URI="${OSS_URI:-oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/dataa_camera_binary_vqa/${RUN_NAME}/}"
 AUTO_UPLOAD_OSS="${AUTO_UPLOAD_OSS:-1}"
+KEEP_ALIVE_AFTER_RUN="${KEEP_ALIVE_AFTER_RUN:-1}"
+KEEP_ALIVE_SCRIPT="${KEEP_ALIVE_SCRIPT:-/input/training/keep.sh}"
+FINALIZED="0"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-16}"
@@ -153,15 +156,41 @@ persist_small_results() {
   cp -a "${LOG_PATH}" "${PERSIST_ROOT}/" 2>/dev/null || true
 }
 
+upload_run_to_oss() {
+  if [[ "${AUTO_UPLOAD_OSS}" == "1" ]]; then
+    ossutil64 cp -r "${RUN_ROOT}/" "${OSS_URI}"
+  fi
+}
+
+finalize_completed_run() {
+  date -u +'%Y-%m-%dT%H:%M:%SZ' > "${RUN_ROOT}/COMPLETED"
+  persist_small_results
+  upload_run_to_oss
+  FINALIZED="1"
+  echo "Experiment results finalized before keepalive."
+}
+
+launch_keepalive() {
+  if [[ "${KEEP_ALIVE_AFTER_RUN}" != "1" ]]; then
+    return
+  fi
+  require_file "${KEEP_ALIVE_SCRIPT}"
+  echo "All experiment work is complete. Starting keepalive: ${KEEP_ALIVE_SCRIPT}"
+  trap - EXIT
+  exec bash "${KEEP_ALIVE_SCRIPT}"
+}
+
 archive_on_exit() {
   local status=$?
   trap - EXIT
   set +e
   stop_checkpoint_uploader
   stop_gpu_monitor
-  persist_small_results
-  if [[ "${AUTO_UPLOAD_OSS}" == "1" && "${STAGE}" != "preflight" ]]; then
-    ossutil64 cp -r "${RUN_ROOT}/" "${OSS_URI}"
+  if [[ "${FINALIZED}" != "1" ]]; then
+    persist_small_results
+    if [[ "${STAGE}" != "preflight" ]]; then
+      upload_run_to_oss
+    fi
   fi
   echo "Pipeline exit status: ${status}"
   echo "Persistent small results: ${PERSIST_ROOT}"
@@ -287,6 +316,7 @@ preflight() {
     --tmp-root "${RUN_ROOT}" \
     --persistent-root "${PERSIST_ROOT}" \
     --oss-uri "${OSS_URI}" \
+    --keepalive-script "${KEEP_ALIVE_SCRIPT}" \
     --expected-gpus "${NPROC_PER_NODE}" \
     --minimum-free-gb 100 \
     --output-json "${PREFLIGHT_DIR}/environment_audit.json"
@@ -360,7 +390,8 @@ case "${STAGE}" in
     score_final
     stop_gpu_monitor
     evaluate_all
-    date -u +'%Y-%m-%dT%H:%M:%SZ' > "${RUN_ROOT}/COMPLETED"
+    finalize_completed_run
+    launch_keepalive
     ;;
   *)
     echo "Unknown STAGE=${STAGE}; expected preflight, build, train, score, eval, or all" >&2
