@@ -79,4 +79,4 @@ Do not paste large raw logs into the experiment log when a compact metric table 
 
 ## Server Code Deployment
 
-- `/input/workflow_58770161/workspace/test/cameramotion_det` is a deployed project copy, not a Git working tree. Do not instruct the user to run `git pull` there. For code updates, state the exact files that changed and provide a temporary shallow-clone-and-copy command or a small upload bundle without touching server data directories.
+- `/input/workflow_58770161/workspace/test/cameramotion_det` is a deployed project copy, not a Git working tree, and the server cannot access GitHub. Do not give server-side `git pull`, `git clone`, GitHub `curl`, or GitHub `wget` commands. For code updates, place the exact changed files or a small bundle under the local project's `server_upload/` directory and tell the user which server paths to overwrite without touching data directories.
