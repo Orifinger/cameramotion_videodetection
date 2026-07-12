@@ -17,6 +17,7 @@
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
 | 2026-07-12 | 相机分层同源配对独立判别最小验证 | 未通过，当前配对排序配方停止 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | Pair margin 被优化但 AUC 仅增 0.46 点、pair accuracy 仅增 1.56 点、复杂运动 AUC 仅增 0.27 点，bootstrap 跨 0；不进入 VIF 与 camera pretext |
+| 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 已立项，待执行阶段一 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 代码与验收条件已固定；先跑 correct/shuffled/base 相机学习曲线，阶段一未通过即停止 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -787,6 +788,60 @@ Smoke 的 DataA pair step 为 loss 1.4200、binary loss 1.2252、pair loss 0.974
 这次实际测试的是：在相同初始 checkpoint、相同 256 个 DataA train pairs、512 条 DataB replay、verdict prompt、LoRA 容量和 64 optimizer steps 下，额外的同源 Fake-vs-Real score margin 是否带来检测增益。方法组平均 pair margin 高于普通对照，说明 pair loss 已经作用于模型；但整体、配对和复杂运动三项增益均远低于验收线，且 pair accuracy 仍低于初始 checkpoint，不能解释为训练不足或损失未生效。
 
 结论标记：`未通过`。当前权重 0.2、margin 0.5 的独立 verdict 配对排序配方正式停止，不追加 loss 权重、margin、epoch 或 LoRA rank 试参。由于第一道 DataA 门失败，不合并模型、不运行 VIF-Bench 保留测试，也不据此启动 camera pretext、DPO 或 GRPO。该结果不否定 camera motion 可能与检测有关，只否定“依靠当前短 verdict 同源排序把 camera 分层监督接入检测”是一个值得在当前期限继续扩展的机制。
+
+## 12. 正确相机能力学习与检测迁移闭环验证
+
+### 这个实验测什么
+
+先验证检测模型能否直接从视频帧学会正确的全局相机运动标签，再检验该能力在检测推理不提供相机文本时，能否相对无相机前置学习和错配相机前置学习稳定提高局部编辑 AIGC 视频检测。
+
+### 状态与日期
+
+- 日期：2026-07-12。
+- 状态：`已立项，待执行阶段一`。
+- 执行说明：`docs/camera_pretext_transfer_validation_20260712.md`。
+
+### 模型与数据
+
+- 初始模型：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
+- DataA detection：`/input/workflow_58770161/workspace/test/cameramotion_det/res/dataA_v1/autolabel/dataa_vace_grounded_cot_40step_v3_sft_clean.json`。
+- DataA camera labels：`/input/workflow_58770161/workspace/test/cameramotion_det/camera/camerajson/dataa_cameramotion_labels_40step_v3.jsonl`。
+- 固定 DataA 开发身份：`/input/workflow_58770161/workspace/test/cameramotion_det/tools/data/camera_motion_splits/dataA_test.json`，预计 321 个 case；这些身份已被项目多次用于诊断，因此只称开发集，不称真正 held-out 最终测试。
+- 相机训练身份：最终完整 DataA case 减固定开发身份，只使用 real 视频；准确可用条数待数据构建审计后补充，camera label 缺失项不会猜测或补标。
+- 阶段二 DataA train pairs：`/tmp/1res/caspr_gate1/data/dataa_train_pairs_256.jsonl`。
+- 阶段二 DataB replay：`/tmp/1res/caspr_gate1/data/datab_replay_512.jsonl`。
+- 阶段二 DataA dev pairs：`/tmp/1res/caspr_gate1/data/dataa_dev_pairs.jsonl`。
+- 无相机前置学习分支既有分数：`/tmp/1res/caspr_gate1/scores/pair_rank`。
+
+### 唯一改变因素与对照
+
+- 阶段一正确相机分支：每个 real 视频使用一个统一 canonical prompt，SFT 目标为规范 camera label JSON list。
+- 阶段一错配相机分支：视频、prompt、步数、优化器和每条目标标签数完全相同；在抖动、运动强度、速度、方向和 tracking 语义组内执行固定合法标签置换，且不允许原目标保留。由于重复最多的完整 label set 超过样本半数，“完整 set 总体分布不变且逐条不同”的严格 derangement 数学上不可行；本对照明确牺牲标签名边缘频率相等性，换取零正确目标。
+- 阶段一基础模型对照：不训练直接在相同开发 prompt 上生成 camera labels。
+- 阶段二三分支使用完全相同的 DataA pair-rank 与 DataB replay 训练；唯一继承差异为无相机前置学习、正确相机前置学习或错配相机前置学习。
+- 阶段二训练和推理 prompt 均不加入 camera caption、camera labels、bbox、mask 或光流特征。
+- 正确相机与错配相机分支总更新步数相同，是判断正确相机监督内容是否有效的严格对照；无相机前置学习分支少 48 个相机 SFT steps，只作为现有方法基线，其差值不能单独归因于相机标签。
+
+### 主要设置
+
+- 阶段一采用 LoRA rank 32、alpha 64、dropout 0.05，学习率 `1e-5`，16 GPU，每卡 1 个视频，先运行 48 optimizer steps，并保存 step 24/48。
+- 同一视频不复制成 CameraBench 式多个 prompt；主训练和主评测只使用一个统一 canonical prompt。
+- 阶段一通过后，额外用一个未训练的同义改写 prompt 做鲁棒性诊断，但不以该诊断替代主指标。
+- 阶段二从选定相机 LoRA 继续训练，不合并完整模型；沿用 64 步 pair-rank 配方、学习率 `2e-5`、32 个 DataA pair steps 与 32 个 DataB replay steps。
+- 本轮是低成本验证，产物位于 `/tmp/1res/camera_pretext_transfer_gate`，无需放 NAS 或上传 OSS。
+
+### 验收标准
+
+- 阶段一：正确相机分支的支持标签 macro-F1 同时比基础模型和错配相机分支至少高 10 个百分点；格式有效率至少 95%；coarse motion bucket accuracy 至少 50%；预测覆盖率至少 99%。
+- 阶段二：正确相机分支相对无相机前置学习和错配相机前置学习均需满足整体 AUC 至少 `+2` 点、pair accuracy 至少 `+3` 点、complex-motion AUC 至少 `+2` 点，且至少两个视频来源 AUC 为正增益。
+- 只有阶段二 DataA 门通过才运行 VIF-Bench；相对无相机前置学习分支允许最多下降 1.5 个百分点。
+
+### 已知限制与立即下一步
+
+- 初始 detection checkpoint 已看过完整 DataB；DataB replay 只用于能力保留，不能作为 held-out 证明。
+- 固定 DataA 开发身份已参与多轮方案诊断，最终论文仍需要独立保留集或明确称为开发消融。
+- 阶段一的 camera labels 来自 CameraBench 标签体系，只建立相机能力是否可学；只有阶段二 correct 同时超过 no-pretext 与 shuffled 才建立相机监督的检测迁移证据。
+- 立即执行数据构建审计和单卡两步 smoke；工程链路正常后运行阶段一 correct/shuffled 的 step 24/48 学习曲线。阶段一未通过，不执行阶段二，也不追加 GRPO、DPO、训练轮数或 prompt-side camera 文本。
 
 ## 记录维护说明
 

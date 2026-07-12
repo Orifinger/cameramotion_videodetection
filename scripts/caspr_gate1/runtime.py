@@ -209,10 +209,10 @@ def attach_new_lora(
     return get_peft_model(model, config)
 
 
-def attach_adapter(model: Any, adapter_path: str) -> Any:
+def attach_adapter(model: Any, adapter_path: str, is_trainable: bool = False) -> Any:
     from peft import PeftModel
 
-    return PeftModel.from_pretrained(model, adapter_path)
+    return PeftModel.from_pretrained(model, adapter_path, is_trainable=is_trainable)
 
 
 def next_record(records: Sequence[dict[str, Any]], draw_index: int, rank: int, world_size: int, seed: int) -> dict[str, Any]:

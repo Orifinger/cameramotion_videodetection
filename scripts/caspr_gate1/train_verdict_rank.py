@@ -14,6 +14,7 @@ import torch.distributed as dist
 import torch.nn.functional as functional
 
 from scripts.caspr_gate1.runtime import (
+    attach_adapter,
     attach_new_lora,
     binary_verdict_loss,
     candidate_token_ids,
@@ -35,6 +36,10 @@ LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path", required=True)
+    parser.add_argument(
+        "--initial-adapter-path",
+        help="Optional camera-pretext LoRA to continue training instead of creating a new LoRA.",
+    )
     parser.add_argument("--train-pairs-jsonl", required=True)
     parser.add_argument("--datab-replay-jsonl", required=True)
     parser.add_argument("--output-dir", required=True)
@@ -83,7 +88,10 @@ def main() -> None:
     tokenizer = processor.tokenizer
     real_token_id, fake_token_id = candidate_token_ids(tokenizer)
     model = load_model(args.model_path, args.attn_implementation, torch.bfloat16)
-    model = attach_new_lora(model, args.lora_rank, args.lora_alpha, args.lora_dropout, LORA_TARGETS)
+    if args.initial_adapter_path:
+        model = attach_adapter(model, args.initial_adapter_path, is_trainable=True)
+    else:
+        model = attach_new_lora(model, args.lora_rank, args.lora_alpha, args.lora_dropout, LORA_TARGETS)
     if hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()
     if hasattr(model, "gradient_checkpointing_enable"):
@@ -185,7 +193,12 @@ def main() -> None:
                     model,
                     processor,
                     output_dir / f"checkpoint-{step + 1}",
-                    {"step": step + 1, "mode": args.mode, "base_model": args.model_path},
+                    {
+                        "step": step + 1,
+                        "mode": args.mode,
+                        "base_model": args.model_path,
+                        "initial_adapter_path": args.initial_adapter_path,
+                    },
                 )
             if world_size > 1:
                 dist.barrier()
@@ -196,6 +209,7 @@ def main() -> None:
         state = {
             "mode": args.mode,
             "base_model": args.model_path,
+            "initial_adapter_path": args.initial_adapter_path,
             "train_pairs_jsonl": args.train_pairs_jsonl,
             "datab_replay_jsonl": args.datab_replay_jsonl,
             "max_steps": args.max_steps,
