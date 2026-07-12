@@ -248,6 +248,7 @@ class CameraMetricTests(unittest.TestCase):
                     }
                 )
                 labels = np.array([[[1 if positive else 0]]], dtype=np.uint8)
+                valid = np.ones_like(labels, dtype=bool)
                 np.savez(
                     feature_dir / f"{case_id}.npz",
                     fake_local_aligned=np.zeros((1, 1, 1, 2), dtype=np.float32),
@@ -256,6 +257,8 @@ class CameraMetricTests(unittest.TestCase):
                     fake_label_unaligned=labels,
                     fake_mask_aligned=labels.astype(np.float32) * 0.2,
                     fake_mask_unaligned=labels.astype(np.float32) * 0.2,
+                    fake_valid_aligned=valid,
+                    fake_valid_unaligned=valid,
                 )
                 (feature_dir / f"{case_id}.json").write_text(
                     json.dumps(
@@ -273,6 +276,7 @@ class CameraMetricTests(unittest.TestCase):
                 feature_dir,
                 min_coverage=0.95,
                 min_positive_mask_rate=0.4,
+                min_aligned_valid_case_rate=0.95,
                 min_camera_inlier_rate=0.5,
                 max_pair_camera_error_normalized=0.02,
             )

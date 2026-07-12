@@ -37,6 +37,7 @@ def summarize(
     *,
     min_coverage: float,
     min_positive_mask_rate: float,
+    min_aligned_valid_case_rate: float,
     min_camera_inlier_rate: float,
     max_pair_camera_error_normalized: float,
 ) -> dict[str, Any]:
@@ -46,6 +47,8 @@ def summarize(
     invalid: list[dict[str, str]] = []
     non_positive_mask_cases: list[dict[str, Any]] = []
     positive_mask_cases = 0
+    aligned_valid_cases = 0
+    aligned_valid_fractions: list[float] = []
     valid_by_split: Counter[str] = Counter()
     positive_by_split: Counter[str] = Counter()
     inlier_rates: list[float] = []
@@ -66,10 +69,22 @@ def summarize(
                 unaligned = archive["fake_local_unaligned"]
                 aligned_mask = archive["fake_mask_aligned"]
                 unaligned_mask = archive["fake_mask_unaligned"]
-                positive_count = int(archive["fake_label_aligned"].sum())
-                positive_unaligned_count = int(archive["fake_label_unaligned"].sum())
+                aligned_label = archive["fake_label_aligned"].astype(bool)
+                unaligned_label = archive["fake_label_unaligned"].astype(bool)
+                aligned_valid = archive["fake_valid_aligned"].astype(bool)
+                unaligned_valid = archive["fake_valid_unaligned"].astype(bool)
+                raw_positive_count = int(aligned_label.sum())
+                raw_positive_unaligned_count = int(unaligned_label.sum())
+                positive_count = int((aligned_label & aligned_valid).sum())
+                positive_unaligned_count = int((unaligned_label & unaligned_valid).sum())
                 max_aligned_mask_fraction = float(aligned_mask.max()) if aligned_mask.size else 0.0
                 max_unaligned_mask_fraction = float(unaligned_mask.max()) if unaligned_mask.size else 0.0
+                max_valid_aligned_mask_fraction = (
+                    float(aligned_mask[aligned_valid].max()) if aligned_valid.any() else 0.0
+                )
+                max_valid_unaligned_mask_fraction = (
+                    float(unaligned_mask[unaligned_valid].max()) if unaligned_valid.any() else 0.0
+                )
                 if not np.isfinite(aligned).all() or not np.isfinite(unaligned).all():
                     raise ValueError("local feature arrays contain non-finite values")
         except Exception as exc:  # noqa: BLE001
@@ -78,6 +93,8 @@ def summarize(
         metadata.append(item)
         split = str(row.get("dataset_split", "unknown"))
         valid_by_split[split] += 1
+        aligned_valid_cases += int(aligned_valid.any())
+        aligned_valid_fractions.append(float(aligned_valid.mean()) if aligned_valid.size else 0.0)
         if positive_count > 0:
             positive_mask_cases += 1
             positive_by_split[split] += 1
@@ -90,8 +107,14 @@ def summarize(
                     "motion_bucket": str(row.get("motion_bucket", "unknown")),
                     "aligned_positive_patch_count": positive_count,
                     "unaligned_positive_patch_count": positive_unaligned_count,
+                    "aligned_raw_positive_patch_count": raw_positive_count,
+                    "unaligned_raw_positive_patch_count": raw_positive_unaligned_count,
+                    "aligned_valid_patch_count": int(aligned_valid.sum()),
+                    "unaligned_valid_patch_count": int(unaligned_valid.sum()),
                     "max_aligned_mask_fraction": max_aligned_mask_fraction,
                     "max_unaligned_mask_fraction": max_unaligned_mask_fraction,
+                    "max_valid_aligned_mask_fraction": max_valid_aligned_mask_fraction,
+                    "max_valid_unaligned_mask_fraction": max_valid_unaligned_mask_fraction,
                 }
             )
         source_counts[str(row.get("source_name", ""))] += 1
@@ -109,11 +132,13 @@ def summarize(
     valid_count = len(metadata)
     coverage = valid_count / len(rows) if rows else 0.0
     positive_rate = positive_mask_cases / valid_count if valid_count else 0.0
+    aligned_valid_case_rate = aligned_valid_cases / valid_count if valid_count else 0.0
     inlier_summary = _finite_quantiles(inlier_rates)
     pair_summary = _finite_quantiles(pair_errors)
     checks = {
         "feature_coverage": coverage >= min_coverage,
         "positive_mask_case_rate": positive_rate >= min_positive_mask_rate,
+        "aligned_valid_case_rate": aligned_valid_case_rate >= min_aligned_valid_case_rate,
         "median_camera_inlier_rate": inlier_summary["median"] >= min_camera_inlier_rate,
         "median_real_fake_camera_error": pair_summary["median"] <= max_pair_camera_error_normalized,
         "no_invalid_feature_files": not invalid,
@@ -126,6 +151,7 @@ def summarize(
         "thresholds": {
             "min_coverage": min_coverage,
             "min_positive_mask_rate": min_positive_mask_rate,
+            "min_aligned_valid_case_rate": min_aligned_valid_case_rate,
             "min_camera_inlier_rate": min_camera_inlier_rate,
             "max_pair_camera_error_normalized": max_pair_camera_error_normalized,
         },
@@ -136,6 +162,9 @@ def summarize(
             "coverage": coverage,
             "positive_mask_cases": positive_mask_cases,
             "positive_mask_case_rate": positive_rate,
+            "aligned_valid_cases": aligned_valid_cases,
+            "aligned_valid_case_rate": aligned_valid_case_rate,
+            "aligned_valid_patch_fraction": _finite_quantiles(aligned_valid_fractions),
             "camera_inlier_rate": inlier_summary,
             "paired_camera_corner_error_normalized": pair_summary,
             "source_counts": dict(source_counts),
@@ -170,6 +199,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-json", type=Path, required=True)
     parser.add_argument("--min-coverage", type=float, default=0.95)
     parser.add_argument("--min-positive-mask-rate", type=float, default=0.90)
+    parser.add_argument("--min-aligned-valid-case-rate", type=float, default=0.95)
     parser.add_argument("--min-camera-inlier-rate", type=float, default=0.50)
     parser.add_argument("--max-pair-camera-error-normalized", type=float, default=0.02)
     return parser.parse_args(argv)
@@ -182,6 +212,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.feature_dir,
         min_coverage=args.min_coverage,
         min_positive_mask_rate=args.min_positive_mask_rate,
+        min_aligned_valid_case_rate=args.min_aligned_valid_case_rate,
         min_camera_inlier_rate=args.min_camera_inlier_rate,
         max_pair_camera_error_normalized=args.max_pair_camera_error_normalized,
     )

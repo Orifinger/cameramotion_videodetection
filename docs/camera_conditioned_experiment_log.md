@@ -15,7 +15,7 @@
 | 2026-07-10 | 普通 DataB 续训与相机文本 DataB 续训 | 未通过 | 经过匹配提示格式训练后，模型是否真正利用正确相机描述改善检测 | 正确相机描述不优于错误描述，并低于不提供相机描述；当前文本条件注入路线未学会利用相机内容 |
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
-| 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 全量提取通过，待 8 个无正 patch case 审计与探针对照 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 1080/1080 特征有效，相机几何审计通过；1072 个 case 有正 mask patch，先核对其余 8 个再训练三组 MLP |
+| 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 全量几何提取通过，局部有效监督口径待复核 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 1080/1080 特征有效；8 个 case 的 unaligned mask 正常但 aligned mask 完全出界，且旧 audit 未与训练的 valid patch 口径对齐，修正审计后再训练 MLP |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -480,7 +480,7 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 ### 状态与日期
 
 - 日期：2026-07-12。
-- 状态：数据和权重预检、来源×运动分层 smoke、人工可视化及 1080-case 全量提取均 `通过`；方法效果仍为 `结论不足`，等待无正 patch case 审计和三组 MLP 对照。
+- 状态：数据和权重预检、来源×运动分层 smoke、人工可视化及 1080-case 文件与相机几何提取均 `通过`；局部有效监督审计和方法效果为 `结论不足`，等待修正口径复核和三组 MLP 对照。
 - 完整执行说明：`docs/camera_aligned_local_trajectory_gate_20260712.md`。
 
 ### 模型与数据
@@ -603,9 +603,26 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 
 该结果仍不建立检测收益。另有 8 个 case 没有任何正的 aligned mask patch；总体比例满足门槛，但在明确它们属于 train/test、真实小区域低于 patch 阈值，还是 mask 时间映射问题之前，不进入三组 MLP 训练。
 
+#### 无正 aligned patch 的 8 个 case 诊断
+
+增强审计结果仍来自 NAS 的 `full_extraction_audit.json`；大型逐 case 特征目录为 `/tmp/1res/camera_flow_probe_40step_v3/full/features`，大小 849M。
+
+| 诊断维度 | 结果 |
+|---|---:|
+| train/test | 6 / 2 |
+| 旧 VACE-14B / dataset 40-step / textedit 40-step | 4 / 3 / 1 |
+| complex-motion / minor-motion | 7 / 1 |
+| unaligned 最大 mask patch 覆盖率 | 8/8 均为 1.0 |
+| unaligned 正 patch 数 | 每 case 43 至 308 |
+| aligned 最大 mask patch 覆盖率 | 8/8 均为 0.0 |
+
+诊断标记为 `结论不足`。它排除了“编辑区域太小、10% patch 阈值过高”：原坐标中的 mask 完整且正 patch 很多，但变换到窗口 anchor 后整体消失。由于问题集中于强运动样本、而 smoke 的几何方向人工检查正常，当前更像是首帧 anchor 有效视野下的整块出界或少数累计变换失效，尚不能直接判定为全局方向写反。
+
+同时发现旧 audit 的 1072/1080 只统计 `fake_label_aligned`，而探针训练实际使用 `fake_label_aligned AND fake_valid_aligned`。因此该数值不能作为最终有效监督覆盖率。2026-07-12 更正：保留原始 1072/1080 结果作为历史输出，但将“全量提取通过”收紧为“文件与相机几何提取通过，局部有效监督待复核”；更正原因是审计口径未与训练选择条件一致。代码已改为报告有效正 patch、aligned 有效 case 率和有效 patch 比例。
+
 ### 立即下一步
 
-更新 audit 代码后重新运行快速审计，取得 8 个无正 patch case 的 id、train/test、来源、motion bucket，以及 aligned/unaligned mask 的最大 patch 覆盖率。用它区分 10% 标签阈值过高与 mask 映射丢失，并检查 `/tmp` 特征目录大小。确认处理规则后，将需要复用的大特征备份到 OSS，再训练和比较三组 MLP。
+拉取有效监督口径修正后再次运行快速 audit，不重跑 RAFT/DINO。根据新的有效正 patch 覆盖率和 aligned 有效域统计决定采用“排除共同 case”还是修改无标签依赖的 anchor 方案。849M 特征属于正式可复用大文件，不放 NAS；确认无需重算后上传 OSS，再训练和比较三组 MLP。
 
 
 ## 记录维护说明
