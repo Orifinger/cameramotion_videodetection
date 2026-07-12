@@ -18,6 +18,7 @@
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
 | 2026-07-12 | 相机分层同源配对独立判别最小验证 | 未通过，当前配对排序配方停止 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | Pair margin 被优化但 AUC 仅增 0.46 点、pair accuracy 仅增 1.56 点、复杂运动 AUC 仅增 0.27 点，bootstrap 跨 0；不进入 VIF 与 camera pretext |
 | 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 阶段一未通过，当前 camera-label SFT 前置路线停止 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 四轮 correct 的 bucket balanced accuracy 仅 33.25%–35.98%，预测 266–283/321 为 complex-motion；确认多数类塌缩，不进入阶段二 |
+| 2026-07-13 | DataA 平衡二元相机问答与视觉依赖门 | 待执行 | 把每个相机 primitive 拆成平衡 Yes/No 问题，验证通用起点和检测起点能否从原视频真正学到相机运动，而不是背标签先验 | 两套 16 GPU 仅改变起始 checkpoint；明日依据正确视频、对立标签视频置换和无视频三条件决定是否进入联合检测辅助训练 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -908,6 +909,66 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 结论边界更正为：停止的是“每视频一条完整 camera-label list 的低学习率 LoRA 前置学习”，不是整个 camera motion 方向。该结果不能证明 MLLM 学不会 camera，也不能证明 camera 对 AIGC 检测无用；下一步若继续，必须先用 balanced binary VQA、正确视频对 shuffled/no-video、candidate-level AP/Q-Acc 完成相机能力复现，再讨论联合检测迁移。
 
 2026-07-13 算术更正：此前把 `60.7477%=195/321` 描述为开发集多数类比例，这是错误的；它实际是 bucket 判对数量。Gold 分布为 complex-motion `213/321=66.36%`、no-motion `61/321`、minor-motion `47/321`。更正不改变多数类塌缩结论，因为 correct-96 将 `279/321` 条预测为 complex，balanced accuracy 只有 34.19%；更正原因是区分 gold 先验比例与模型实际判对率。
+
+## 13. DataA 平衡二元相机问答与视觉依赖门
+
+### 这个实验测什么
+
+把 DataA 的每个全局相机运动 primitive 分解成独立且正负平衡的 Yes/No 视频问答，先判断相机能力在当前数据上是否可学，再用对立标签视频置换和无视频输入排除只背问题、标签频率或回答格式的情况。这是相机辅助检测之前的能力门，不是最终检测方法，也不直接报告 AIGC 真伪检测收益。
+
+### 状态与日期
+
+- 日期：2026-07-13。
+- 状态：`待执行`。
+- 执行说明：`docs/dataa_camera_binary_vqa_unattended_20260713.md`。
+
+### 模型与数据
+
+- 通用模型起点：`/home/admin/Qwen3-VL-8B-Instruct`。
+- 检测模型起点：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
+- 最终 DataA case manifest：`/input/workflow_58770161/workspace/test/cameramotion_det/res/camera_flow_probe_40step_v3/dataa_camera_flow_probe_manifest_40step_v3.jsonl`。
+- 训练身份：manifest 中固定 `dataset_split=train` 的 DataA real 视频。
+- 开发身份：manifest 中固定 `dataset_split=test` 的 DataA real 视频，预计 321 个 case；这些身份已经参加过项目内多轮诊断，只称开发集，不称论文最终 held-out test。
+- 构建后的平衡问答、三种开发输入和审计摘要：各运行的 `/tmp/1res/dataa_camera_binary_vqa/<运行名>/data/`。
+
+### 唯一改变因素与对照
+
+- 两套机器使用完全相同的 case split、问题、样本顺序、LoRA、学习率、FPS、最大像素、训练轮数和评测代码，唯一跨机器因素是通用 Qwen3-VL 起点或 DataB detection SFT 起点。
+- 每个支持的 camera primitive 都构造等量 Yes/No 训练与开发样本；每个 primitive 只使用一个固定语义问题，不把同一视频复制成 25 个 prompt。
+- 正确视频条件：问题与原视频 camera label 匹配。
+- 对立标签视频置换条件：保留问题和 gold answer，但将同一 primitive 的 Yes/No 配对视频互换；若模型依赖视频，性能应明显下降。
+- 无视频条件：保留同一问题和 gold answer，移除视频；平衡数据使纯文本标签先验不能稳定超过随机水平。
+- 推理不接收 GT camera caption 或 camera label 文本；输出分数由首个回答位置的 `P(Yes)` 与 `P(No)` 得到。
+
+### 主要设置
+
+- 输入使用 DataA 原始 real MP4，按 8 FPS 采样，`video_max_pixels=16384`。
+- 16 GPU、每卡 1 个视频；每个 rank 使用 4 个 CPU threads，避免 16 个解码进程过度抢占 96 个物理核。
+- LoRA rank 64、alpha 128、dropout 0.05，学习率 `2e-4`，cosine scheduler，warmup 3%。
+- 最多 5 epochs；训练墙钟上限默认 16200 秒，并保证至少完成 1 epoch。保存第一轮 adapter 和实际训练终点 adapter，避免用短跑失败直接否定可学性。
+- 指标：candidate-level AP、ROC-AUC、balanced accuracy、逐 primitive macro 指标和 paired question accuracy；基础模型、第一轮和最终轮均有正确视频结果，最终轮额外评测两种视觉控制。
+
+### 验收标准
+
+- 预测覆盖率至少 99%，至少 20 个 primitive 同时具有足够 train/dev 正负支持，实际训练至少 1 epoch。
+- 最终正确视频 macro AP 至少 65%，总体 balanced accuracy 至少 60%，paired question accuracy 至少 35%。
+- 最终正确视频 macro AP 相对同一起点未训练模型至少提高 8 个百分点。
+- 最终正确视频 balanced accuracy 相对无视频至少提高 8 个百分点，相对对立标签视频置换至少提高 15 个百分点。
+- 上述阈值是进入下一阶段的工程门，不作为论文最终显著性结论；明日还要横向比较两个起点的逐标签曲线和训练终点。
+
+### 泄漏、分布差异与结论边界
+
+- 训练/开发按 case identity 严格互斥；构建脚本保存 hash、每类正负支持和交集审计。
+- DataA 源自 CameraBench train videos，且固定开发身份已被前序实验反复查看，因此该门只能回答“当前监督和模型能否学到相机视觉能力”，不能冒充 CameraBench 官方测试或论文最终泛化结果。
+- 本轮只使用 real 视频和 camera labels，不包含 fake 视频、AIGC verdict 或局部 bbox，因此通过也不证明 camera 能提高检测；它只允许下一步构造联合 `detection + camera auxiliary` 的最小门。
+- 如果通用起点通过而检测起点失败，支持“专项 detection SFT 使 camera 能力难以恢复”的诊断；两者都通过说明可直接从检测起点继续；两者都失败则先审计标签映射、视频采样和优化目标，不启动联合检测大实验。
+
+### 存储与立即下一步
+
+- DataA 原视频继续位于 `/tmp`，本轮不复制视频。
+- 逐样本分数、数据摘要、训练日志和 gate summary 属于持久化小结果，脚本退出时复制到 `/input/workflow_58770161/workspace/test/cameramotion_det/res/dataa_camera_binary_vqa/<运行名>/`。
+- 第一轮和最终 LoRA adapter 属于可能复用的大结果，保存在 `/tmp/1res/dataa_camera_binary_vqa/<运行名>/`，脚本退出时自动上传到 `oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/dataa_camera_binary_vqa/<运行名>/`。
+- 明日先比较两个 `gate_summary.json`；只有至少检测起点通过，或通用起点明显通过且检测起点失败的原因可修复，才设计无 GT camera 文本的联合检测辅助训练。今晚不并行投机运行联合检测、DPO、GRPO 或完整 VIF-Bench。
 
 ## 记录维护说明
 
