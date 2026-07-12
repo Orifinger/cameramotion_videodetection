@@ -16,7 +16,7 @@
 | 2026-07-11 | 相机运动前置感知强化学习最小验证 | 降为辅助消融 | 不向检测模型提供外部 camera 文本，先奖励模型从视频预测相机运动，再检验该能力是否迁移到检测 | 单独 camera pretext 没有直接约束局部证据；保留代码，只在局部反事实 Gate 通过后作为增量消融 |
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
-| 2026-07-12 | 相机分层同源配对独立判别最小验证 | 已立项，待执行 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | 先运行 256 对 DataA、512 条 DataB replay、64 步的 LoRA 对照；DataA 门通过后才测 VIF 保留和 camera pretext |
+| 2026-07-12 | 相机分层同源配对独立判别最小验证 | 数据构建与单卡 smoke 通过，正式训练待执行 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | 工程链路正常；发现旧 train JSON 漏 13 个新 case，已改为完整 1080 减固定 321 dev 后重新构建 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -709,7 +709,7 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 ### 状态与日期
 
 - 日期：2026-07-12。
-- 状态：`已立项，待执行`。
+- 状态：`数据构建与单卡 smoke 通过，正式训练待执行`。
 - 完整执行说明：`docs/caspr_gate1_execution_20260712.md`。
 
 ### 模型与数据
@@ -747,6 +747,26 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 ### 已知限制与下一步
 
 该门只验证配对排序能否接入普通检测，不建立 camera pretext 的独立贡献，也不评价解释文本改善。先执行数据构建和单卡两步 smoke；DataA 与 VIF 保留同时通过后，才运行正确 camera labels、打乱 camera labels 和无 camera pretext 的等算力对照。若配对排序门未通过，则停止当前配方，不启动 camera pretext、DPO 或 GRPO。
+
+### 2026-07-12 数据构建与单卡 smoke 结果
+
+结果来源：`/tmp/1res/caspr_gate1/data/caspr_gate1_data_summary.json`、`/tmp/1res/caspr_gate1/smoke/pair_rank/all_results.json` 和 `trainer_log.jsonl`。
+
+| 检查项 | 结果 |
+|---|---:|
+| 完整 DataA Real/Fake pairs | 1080 |
+| 固定 dev pairs | 321 |
+| 首次显式 train JSON 覆盖 | 746 |
+| 预期 train 补集 | 759 |
+| 选中 Gate 训练 pairs | 256 |
+| DataB replay | 512，Real/Fake 各 256 |
+| train/dev 交集 | 0 |
+| `Real/Fake` candidate token | 均为单 token，ID 8800/36965 |
+| 两步 smoke | 正常完成，pair 与 replay 均有有限 loss 和非零梯度 |
+
+Smoke 的 DataA pair step 为 loss 1.4200、binary loss 1.2252、pair loss 0.9741、梯度范数 16.72；DataB replay step 为 loss 0.00861、梯度范数 0.429。该结果只建立工程链路可训练，不建立检测收益。首次构建读取旧 `dataA_train.json` 后只有 746 个 eligible train pairs；与最终 1080 减固定 321 dev 应有 759 train 不一致。
+
+2026-07-12 更正：正式训练默认不再读取旧 `dataA_train.json`，统一用 1080 个完整 pair 减去固定 321 dev 得到 759 train，再按来源与 motion bucket 选择 256 pairs。更正原因是旧 train JSON 未覆盖 13 个新 40step_v3 case；首次 smoke 不作为训练结果，无需保留其旧抽样，重新运行 `STAGE=build` 即可。
 
 ## 记录维护说明
 

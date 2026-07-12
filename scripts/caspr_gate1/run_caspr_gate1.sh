@@ -22,6 +22,7 @@ DATAA_DETECTION_JSON="${DATAA_DETECTION_JSON:-${PROJECT_ROOT}/res/dataA_v1/autol
 DATAA_CAMERA_JSONL="${DATAA_CAMERA_JSONL:-${PROJECT_ROOT}/camera/camerajson/dataa_cameramotion_labels_40step_v3.jsonl}"
 DATAA_TRAIN_JSON="${DATAA_TRAIN_JSON:-${PROJECT_ROOT}/tools/data/camera_motion_splits/dataA_train.json}"
 DATAA_DEV_JSON="${DATAA_DEV_JSON:-${PROJECT_ROOT}/tools/data/camera_motion_splits/dataA_test.json}"
+USE_EXPLICIT_DATAA_TRAIN="${USE_EXPLICIT_DATAA_TRAIN:-0}"
 DATAB_DETECTION_JSON="${DATAB_DETECTION_JSON:-/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/detection/v4vif_2766busterall_trainall.json}"
 
 TRAIN_PAIRS="${DATA_DIR}/dataa_train_pairs_256.jsonl"
@@ -42,7 +43,10 @@ build_data() {
   local check_args=()
   local train_args=()
   if [[ "${CHECK_IMAGES}" == "1" ]]; then check_args+=(--check-images); fi
-  if [[ -f "${DATAA_TRAIN_JSON}" ]]; then train_args+=(--dataa-train-json "${DATAA_TRAIN_JSON}"); fi
+  if [[ "${USE_EXPLICIT_DATAA_TRAIN}" == "1" ]]; then
+    require_file "${DATAA_TRAIN_JSON}"
+    train_args+=(--dataa-train-json "${DATAA_TRAIN_JSON}")
+  fi
   "${PYTHON_BIN}" tools/build_caspr_gate1_data.py \
     --dataa-detection-json "${DATAA_DETECTION_JSON}" \
     --dataa-camera-jsonl "${DATAA_CAMERA_JSONL}" \

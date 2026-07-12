@@ -304,11 +304,12 @@ def main() -> None:
             pairs[identity[0]][identity[1]] = row
 
     complete = {case_id: pair for case_id, pair in pairs.items() if set(pair) == {"real", "fake"}}
-    train_ids = (
-        case_ids_from_split(args.dataa_train_json)
-        if args.dataa_train_json
-        else set(complete) - dev_ids
-    )
+    if args.dataa_train_json:
+        train_ids = case_ids_from_split(args.dataa_train_json)
+        train_partition_source = "explicit_train_json"
+    else:
+        train_ids = set(complete) - dev_ids
+        train_partition_source = "all_complete_pairs_minus_fixed_dev"
     if train_ids & dev_ids:
         raise ValueError(f"DataA train/dev leakage: {sorted(train_ids & dev_ids)[:20]}")
     candidates: list[dict[str, Any]] = []
@@ -414,6 +415,8 @@ def main() -> None:
             "datab_replay_records": len(replay),
             "camera_mismatch_train_pairs_excluded": len(camera_mismatches),
         },
+        "train_partition_source": train_partition_source,
+        "complete_pairs_not_assigned_to_train_or_dev": sorted(set(complete) - train_ids - dev_ids),
         "selected_train_source_motion": {
             f"{source}|{bucket}": count for (source, bucket), count in sorted(selected_counts.items())
         },
