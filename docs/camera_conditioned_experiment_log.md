@@ -17,7 +17,7 @@
 | 2026-07-11 | 相机匹配局部反事实三门验收 | Gate 1 synthetic-rejected DPO 未通过并停止 | 控制相同内容和全局相机运动，只改变局部生成区域，先验证局部信号，再验证配对学习能否迁移到普通检测 | 半程与最终 LoRA-DPO 均未提升选择、定位或位置平衡，且训练偏好目标已正常收敛；排除后半程退化，不再追加 DPO/GRPO 试参 |
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
 | 2026-07-12 | 相机分层同源配对独立判别最小验证 | 未通过，当前配对排序配方停止 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | Pair margin 被优化但 AUC 仅增 0.46 点、pair accuracy 仅增 1.56 点、复杂运动 AUC 仅增 0.27 点，bootstrap 跨 0；不进入 VIF 与 camera pretext |
-| 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 四轮自动门通过，视觉依赖审计待补，结论不足 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 自动规则最早在 step 96 通过，但 bucket ACC 与 195/321 多数类比例完全一致；补 balanced accuracy、预测分布和打乱帧审计前不进入阶段二 |
+| 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 阶段一未通过，当前 camera-label SFT 前置路线停止 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 四轮 correct 的 bucket balanced accuracy 仅 33.25%–35.98%，预测 266–283/321 为 complex-motion；确认多数类塌缩，不进入阶段二 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -798,7 +798,7 @@ Smoke 的 DataA pair step 为 loss 1.4200、binary loss 1.2252、pair loss 0.974
 ### 状态与日期
 
 - 日期：2026-07-12。
-- 状态：`干净四轮自动门在 step 96 通过；发现多数类塌缩风险，视觉依赖审计前仍为结论不足`。
+- 状态：`阶段一未通过；当前 camera-label SFT 前置路线停止，不进入检测迁移`。
 - 执行说明：`docs/camera_pretext_transfer_validation_20260712.md`。
 
 ### 模型与数据
@@ -883,6 +883,21 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 结论标记：`结论不足，暂不进入阶段二`。Correct 的 bucket accuracy 在 step 48/96 精确为 `195/321=60.7477%`，step 144/192 也只差一个样本；该恒定值强烈提示模型可能始终输出开发集多数 motion bucket。当前自动门只要求普通 bucket accuracy ≥50%，没有检查 balanced accuracy、预测 bucket 覆盖或混淆矩阵，因此“coarse bucket not collapsed”检查不充分。此外，固定语义置换会改变标签名边缘先验，correct 优于 shuffled-training 不能单独证明预测依赖视频内容。
 
 2026-07-13 审计更正：保留原自动 `passed` 输出作为历史结果，但在补充以下两项后才决定阶段一是否真正通过：一是报告 bucket balanced accuracy、gold/pred bucket 分布和混淆矩阵；二是对同一个 correct step-96 模型比较正确视频帧与最大化 bucket 错配的帧置换输入。该复核只复用现有 checkpoint 和预测，不重新训练；原因是排除标签先验和多数类塌缩，而不是追加试参。
+
+### 2026-07-13 多数类审计最终结果
+
+更正后结果仍来自同一文件：`/tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_clean_4epoch_curve.json`。Gold motion bucket 分布为 complex-motion `213/321`、no-motion `61/321`、minor-motion `47/321`。
+
+| 累计 step | Correct 普通 bucket ACC | Correct balanced ACC | Pred complex | Pred minor | Pred no-motion | 自动更正状态 |
+|---|---:|---:|---:|---:|---:|---|
+| 48 | 60.75% | 33.25% | 283 | 3 | 25 | 未通过 |
+| 96 | 60.75% | 34.19% | 279 | 14 | 25 | 未通过 |
+| 144 | 60.44% | 35.98% | 266 | 18 | 35 | 未通过 |
+| 192 | 60.44% | 34.97% | 273 | 24 | 22 | 未通过 |
+
+四个 checkpoint 虽然都至少预测过三个 bucket，但分布始终高度集中于 complex-motion；balanced accuracy 只在三分类随机水平 `33.33%` 附近，且从第三轮到第四轮没有继续改善。Correct 相对 shuffled-training 的多标签 F1 优势主要说明模型学到了不同标签先验/输出分布，不能证明从视频内容获得了可迁移的相机运动表征。
+
+结论标记：`未通过`。原普通 accuracy 门的 `passed` 已被多数类审计推翻；历史输出保留，不静默覆盖。当前 camera-label SFT 前置路线正式停止，不运行打乱帧额外 GPU 推理、不执行阶段二 pair-rank 检测迁移，也不追加 epoch、prompt 复制、DPO 或 GRPO。打乱帧工具代码保留，但因为绝对 balanced accuracy 门已经失败，无需继续消耗算力证明视觉依赖。
 
 ## 记录维护说明
 
