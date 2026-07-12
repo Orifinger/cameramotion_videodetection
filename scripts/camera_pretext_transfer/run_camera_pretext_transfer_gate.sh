@@ -15,6 +15,7 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-16}"
 MAX_PIXELS="${MAX_PIXELS:-262144}"
 CAMERA_STEPS="${CAMERA_STEPS:-48}"
+CAMERA_SAVE_STEPS="${CAMERA_SAVE_STEPS:-24}"
 CAMERA_CHECKPOINT_STEP="${CAMERA_CHECKPOINT_STEP:-48}"
 CHECK_IMAGES="${CHECK_IMAGES:-1}"
 
@@ -80,7 +81,7 @@ train_camera() {
       --max-steps "${CAMERA_STEPS}" \
       --learning-rate 1e-5 \
       --max-pixels "${MAX_PIXELS}" \
-      --save-steps 24 \
+      --save-steps "${CAMERA_SAVE_STEPS}" \
       --seed 20260712
   else
     torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
@@ -94,7 +95,7 @@ train_camera() {
       --lora-alpha 64 \
       --lora-dropout 0.05 \
       --max-pixels "${MAX_PIXELS}" \
-      --save-steps 24 \
+      --save-steps "${CAMERA_SAVE_STEPS}" \
       --seed 20260712
   fi
 }
@@ -221,6 +222,35 @@ case "${STAGE}" in
   infer_camera_shuffled_24) infer_camera shuffled_24 "${CAMERA_ROOT}/shuffled/checkpoint-24" "${CAMERA_DEV_CANONICAL}" ;;
   infer_camera_shuffled_48) infer_camera shuffled_48 "${CAMERA_ROOT}/shuffled/checkpoint-48" "${CAMERA_DEV_CANONICAL}" ;;
   eval_stage1) eval_stage1 ;;
+  train_correct_clean_4epoch)
+    CAMERA_STEPS=192 CAMERA_SAVE_STEPS=48 train_camera correct_clean_4epoch "${CAMERA_TRAIN_CORRECT}"
+    ;;
+  train_shuffled_clean_4epoch)
+    CAMERA_STEPS=192 CAMERA_SAVE_STEPS=48 train_camera shuffled_clean_4epoch "${CAMERA_TRAIN_SHUFFLED}"
+    ;;
+  infer_camera_clean_4epoch)
+    for step in 48 96 144 192; do
+      infer_camera "correct_clean_${step}" \
+        "${CAMERA_ROOT}/correct_clean_4epoch/checkpoint-${step}" "${CAMERA_DEV_CANONICAL}"
+      infer_camera "shuffled_clean_${step}" \
+        "${CAMERA_ROOT}/shuffled_clean_4epoch/checkpoint-${step}" "${CAMERA_DEV_CANONICAL}"
+    done
+    ;;
+  eval_stage1_clean_4epoch)
+    mkdir -p "${CAMERA_EVAL_ROOT}"
+    for step in 48 96 144 192; do
+      eval_camera_one "correct_clean_${step}" "${CAMERA_DEV_CANONICAL}"
+      eval_camera_one "shuffled_clean_${step}" "${CAMERA_DEV_CANONICAL}"
+      "${PYTHON_BIN}" -m scripts.camera_pretext_transfer.eval_stage1_gate \
+        --base-summary "${CAMERA_EVAL_ROOT}/base.json" \
+        --correct-summary "${CAMERA_EVAL_ROOT}/correct_clean_${step}.json" \
+        --shuffled-summary "${CAMERA_EVAL_ROOT}/shuffled_clean_${step}.json" \
+        --output-json "${CAMERA_EVAL_ROOT}/stage1_gate_clean_step_${step}.json"
+    done
+    "${PYTHON_BIN}" -m scripts.camera_pretext_transfer.summarize_stage1_curve \
+      --eval-dir "${CAMERA_EVAL_ROOT}" \
+      --output-json "${CAMERA_EVAL_ROOT}/stage1_clean_4epoch_curve.json"
+    ;;
   continue_correct_96)
     CAMERA_STEPS=48 train_camera correct_96 "${CAMERA_TRAIN_CORRECT}" \
       "${CAMERA_ROOT}/correct/checkpoint-48"

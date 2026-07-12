@@ -132,6 +132,24 @@ cat /tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_gate_step_96.json
 
 这里的 `96` 表示累计 camera SFT 更新步数约为 96；第二段重新初始化 optimizer 和 48 步 cosine scheduler，因此它是低成本续训 gate，不冒充一次连续 optimizer-state 的正式 96 步训练。若该 gate 通过，正式复现实验再从初始模型用修正后的结束标记监督连续训练 96 步；若仍未通过，停止本路线。
 
+### 4.2 最终采用：干净四轮学习曲线
+
+2026-07-13 进一步核对后明确：约 750 条训练视频、16 GPU、每卡 batch 1 时，每个 epoch 约为 `ceil(750/16)=47` steps。因此旧 step 48 已约等于一轮，而不是一次极短训练。考虑到 correct 在第一轮末仍未平台，最终不采用上面的分段 96 步作为正式判断，改为从原始 detection checkpoint 使用修正后的结束标记监督，连续训练固定最多 192 steps，约四个 epochs。
+
+Correct 与 shuffled 都使用完全相同的 192 步预算，在累计 step `48/96/144/192` 保存。选择规则预先固定为：使用最早同时通过全部阶段一检查的 checkpoint；若四个 checkpoint 均未通过，则停止，不再增加 epoch。
+
+```bash
+STAGE=train_correct_clean_4epoch bash "$RUN"
+STAGE=train_shuffled_clean_4epoch bash "$RUN"
+
+STAGE=infer_camera_clean_4epoch bash "$RUN"
+STAGE=eval_stage1_clean_4epoch bash "$RUN"
+
+cat /tmp/1res/camera_pretext_transfer_gate/camera_eval/stage1_clean_4epoch_curve.json
+```
+
+旧的 `continue_*_96` 命令仅保留用于复现历史决策过程，不再作为当前正式执行路径。
+
 ### 5. 阶段二训练、推理与验收
 
 只有阶段一通过才执行。以下示例选择 step 48：
