@@ -27,7 +27,8 @@ REQUIRED_PROJECT_FILES = (
     "scripts/camera_binary_vqa/evaluate.py",
     "scripts/camera_binary_vqa/summarize_gate.py",
     "scripts/camera_binary_vqa/preflight_environment.py",
-    "scripts/camera_binary_vqa/estimate_duration.py",
+    "scripts/camera_binary_vqa/distributed_smoke.py",
+    "scripts/camera_binary_vqa/monitor_gpu_utilization.py",
     "scripts/camera_binary_vqa/run_unattended.sh",
 )
 
@@ -141,6 +142,35 @@ def main() -> None:
         checks["gpu_count"] = False
         checks["gpu_memory"] = False
     details["torch_runtime"] = torch_info
+
+    nvidia_smi = shutil.which("nvidia-smi")
+    details["nvidia_smi"] = {"path": nvidia_smi}
+    nvidia_query_ok = False
+    if nvidia_smi:
+        try:
+            result = subprocess.run(
+                [
+                    nvidia_smi,
+                    "--query-gpu=utilization.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            nvidia_query_ok = result.returncode == 0 and len(values) == args.expected_gpus
+            details["nvidia_smi"].update(
+                {
+                    "returncode": result.returncode,
+                    "gpu_values": values,
+                    "stderr_tail": result.stderr[-1000:],
+                }
+            )
+        except Exception as exc:
+            details["nvidia_smi"]["error"] = repr(exc)
+    checks["nvidia_smi_utilization_query"] = nvidia_query_ok
 
     ossutil = shutil.which("ossutil64")
     details["ossutil64"] = {"path": ossutil, "uri": args.oss_uri}

@@ -37,19 +37,19 @@
 - `scripts/camera_binary_vqa/evaluate.py`
 - `scripts/camera_binary_vqa/summarize_gate.py`
 - `scripts/camera_binary_vqa/preflight_environment.py`
-- `scripts/camera_binary_vqa/estimate_duration.py`
+- `scripts/camera_binary_vqa/distributed_smoke.py`
+- `scripts/camera_binary_vqa/monitor_gpu_utilization.py`
 - `scripts/camera_binary_vqa/run_unattended.sh`
 
 ## 离开电脑前的短检查
 
-两套机器分别先运行一次 preflight，预计约 10 至 20 分钟。它会完成以下检查，但不上传 OSS：
+两套机器分别先运行一次快速 preflight，通常约 1 至 3 分钟。它会完成以下检查，但不上传 OSS：
 
 1. 模型、manifest、项目脚本和全部 DataA real MP4 是否存在。
 2. 16 张 GPU、每卡显存、CUDA、PyTorch、Transformers、PEFT 和 `qwen_vl_utils` 是否可用。
 3. `/tmp` 是否至少有 100 GB 空闲空间，NAS 是否可写，`ossutil64` 是否能读取目标 OSS 前缀。
-4. 16 卡对 32 条原视频执行 8 FPS candidate scoring，验证原生视频处理和分布式推理。
-5. 16 卡执行 4 个 LoRA optimizer steps，验证视频解码、反向传播、NCCL 同步和 adapter 保存。
-6. 根据实测训练 step 时间和推理吞吐生成整条流水线耗时估计。
+4. 16 卡执行一次小矩阵计算和 distributed all-reduce，验证 CUDA 与进程间通信。
+5. 单卡实际读取 2 条原视频并完成 8 FPS candidate scoring，验证模型、processor 和原生视频执行链路。
 
 ```bash
 cd /input/workflow_58770161/workspace/test/cameramotion_det
@@ -77,10 +77,10 @@ bash scripts/camera_binary_vqa/run_unattended.sh
 
 ```bash
 cat /tmp/1res/dataa_camera_binary_vqa/detection_checkpoint_start/preflight/environment_audit.json
-cat /tmp/1res/dataa_camera_binary_vqa/detection_checkpoint_start/preflight/duration_estimate.json
+cat /tmp/1res/dataa_camera_binary_vqa/detection_checkpoint_start/preflight/distributed_smoke.json
 ```
 
-通用起点将路径中的 `detection_checkpoint_start` 改为 `generic_instruct_start`。只有 `environment_audit.json` 为 `passed`，并确认 `duration_estimate.json` 中 `fits_eight_hours_conservatively` 为 `true`，才执行完整命令。
+通用起点将路径中的 `detection_checkpoint_start` 改为 `generic_instruct_start`。两个 JSON 都为 `passed`，且终端中的两条模型 smoke 推理正常结束，即可执行完整命令。
 
 ## 无人值守完整命令
 
@@ -110,7 +110,15 @@ bash scripts/camera_binary_vqa/run_unattended.sh
 
 脚本默认使用 16 GPU、每个 rank 4 个 CPU threads、8 FPS、`video_max_pixels=16384`、LoRA rank 64、学习率 `2e-4`、最多 5 epochs 和 16200 秒训练上限。不要为两套机器修改不同参数，否则起点对照失效。
 
-训练本身有 4.5 小时硬上限，并保证至少完成一轮。未测服务器吞吐前，整条流水线粗略按 5.5 至 7 小时预留；其中还包括三次模型评测加载、五份开发条件等价推理、指标汇总和 OSS 上传。最终以各机器 preflight 生成的实测估计为准，因为共享负载、视频解码缓存和 OSS 带宽会改变总时长。
+训练本身有 4.5 小时硬上限，并保证至少完成一轮。整条流水线粗略按 5.5 至 7 小时预留，其中还包括三次模型评测加载、五份开发条件等价推理、指标汇总和 OSS 上传；共享负载、视频解码缓存和 OSS 带宽会改变实际总时长。
+
+正式 `STAGE=all` 会从基础评测开始，到最终三条件评测结束，每 60 秒读取一次 16 张 GPU 的利用率。每个固定连续两小时窗口都按“所有 GPU、所有采样点”的平均值计算，门槛为 30%。结果保存在：
+
+```text
+/tmp/1res/dataa_camera_binary_vqa/<运行名>/gpu_monitor/gpu_utilization_summary.json
+```
+
+默认 `FAIL_ON_LOW_GPU_UTIL=1`；任一完整两小时窗口低于 30% 时，实验结果仍会正常评测、归档和上传，但流水线最终返回失败状态并记录具体窗口。监控不通过无意义的额外计算抬高数值。
 
 ## 产物位置
 

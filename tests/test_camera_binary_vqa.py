@@ -8,6 +8,7 @@ from scripts.camera_binary_vqa.build_data import (
     opposite_video_controls,
 )
 from scripts.camera_binary_vqa.evaluate import binary_metrics, evaluate_condition
+from scripts.camera_binary_vqa.monitor_gpu_utilization import summarize_window
 
 
 class CameraBinaryVqaDataTests(unittest.TestCase):
@@ -86,6 +87,20 @@ class CameraBinaryVqaMetricTests(unittest.TestCase):
         result = evaluate_condition(gold, one_wrong)
         self.assertEqual(result["coverage"], 1.0)
         self.assertEqual(result["paired_question_accuracy"], 0.0)
+
+    def test_complete_gpu_window_enforces_mean_threshold(self) -> None:
+        passed = summarize_window(
+            0, "start", 7200.0, [[40.0, 20.0], [30.0, 30.0]], 30.0, True
+        )
+        failed = summarize_window(
+            1, "start", 7200.0, [[20.0, 20.0], [30.0, 20.0]], 30.0, True
+        )
+        partial = summarize_window(
+            2, "start", 600.0, [[10.0, 10.0]], 30.0, False
+        )
+        self.assertTrue(passed["passed"])
+        self.assertFalse(failed["passed"])
+        self.assertIsNone(partial["passed"])
 
 
 if __name__ == "__main__":

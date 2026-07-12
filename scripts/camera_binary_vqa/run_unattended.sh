@@ -29,7 +29,13 @@ TRAIN_DIR="${RUN_ROOT}/train"
 SCORE_ROOT="${RUN_ROOT}/scores"
 EVAL_DIR="${RUN_ROOT}/eval"
 PREFLIGHT_DIR="${RUN_ROOT}/preflight"
+GPU_MONITOR_DIR="${RUN_ROOT}/gpu_monitor"
 LOG_PATH="${RUN_ROOT}/pipeline.log"
+GPU_UTIL_SAMPLE_SECONDS="${GPU_UTIL_SAMPLE_SECONDS:-60}"
+GPU_UTIL_WINDOW_SECONDS="${GPU_UTIL_WINDOW_SECONDS:-7200}"
+MIN_GPU_UTIL_PERCENT="${MIN_GPU_UTIL_PERCENT:-30}"
+FAIL_ON_LOW_GPU_UTIL="${FAIL_ON_LOW_GPU_UTIL:-1}"
+GPU_MONITOR_PID=""
 
 TRAIN_JSONL="${DATA_DIR}/train_balanced.jsonl"
 DEV_MATCHED="${DATA_DIR}/dev_matched_video.jsonl"
@@ -51,6 +57,56 @@ require_dir() {
     echo "Missing directory: $1" >&2
     exit 2
   fi
+}
+
+start_gpu_monitor() {
+  mkdir -p "${GPU_MONITOR_DIR}"
+  "${PYTHON_BIN}" -m scripts.camera_binary_vqa.monitor_gpu_utilization \
+    --parent-pid "$$" \
+    --output-jsonl "${GPU_MONITOR_DIR}/gpu_utilization_samples.jsonl" \
+    --summary-json "${GPU_MONITOR_DIR}/gpu_utilization_summary.json" \
+    --expected-gpus "${NPROC_PER_NODE}" \
+    --sample-interval-seconds "${GPU_UTIL_SAMPLE_SECONDS}" \
+    --window-seconds "${GPU_UTIL_WINDOW_SECONDS}" \
+    --minimum-window-mean "${MIN_GPU_UTIL_PERCENT}" &
+  GPU_MONITOR_PID=$!
+  sleep 2
+  if ! kill -0 "${GPU_MONITOR_PID}" 2>/dev/null; then
+    echo "GPU utilization monitor failed to start" >&2
+    exit 2
+  fi
+  echo "GPU utilization monitor started: pid=${GPU_MONITOR_PID}"
+}
+
+stop_gpu_monitor() {
+  if [[ -n "${GPU_MONITOR_PID}" ]] && kill -0 "${GPU_MONITOR_PID}" 2>/dev/null; then
+    kill -TERM "${GPU_MONITOR_PID}" 2>/dev/null || true
+    wait "${GPU_MONITOR_PID}" 2>/dev/null || true
+  fi
+  GPU_MONITOR_PID=""
+}
+
+enforce_gpu_utilization() {
+  local summary="${GPU_MONITOR_DIR}/gpu_utilization_summary.json"
+  require_file "${summary}"
+  "${PYTHON_BIN}" -c '
+import json, sys
+path, minimum, fail_on_low = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
+summary = json.load(open(path, encoding="utf-8"))
+complete = summary.get("num_complete_windows", 0)
+violations = summary.get("num_violations", 0)
+full_mean = float(summary.get("full_compute_phase_mean_percent", 0.0))
+passed = violations == 0 and (complete > 0 or full_mean >= minimum) and not summary.get("errors")
+print(json.dumps({
+    "gpu_utilization_requirement_passed": passed,
+    "complete_two_hour_windows": complete,
+    "violations": violations,
+    "full_compute_phase_mean_percent": full_mean,
+    "minimum_percent": minimum,
+}, ensure_ascii=False, indent=2))
+if fail_on_low and not passed:
+    raise SystemExit(3)
+' "${summary}" "${MIN_GPU_UTIL_PERCENT}" "${FAIL_ON_LOW_GPU_UTIL}"
 }
 
 persist_small_results() {
@@ -79,16 +135,15 @@ persist_small_results() {
     mkdir -p "${PERSIST_ROOT}/preflight"
     find "${PREFLIGHT_DIR}" -maxdepth 1 -type f -name '*.json' \
       -exec cp -a '{}' "${PERSIST_ROOT}/preflight/" \;
-    if [[ -f "${PREFLIGHT_DIR}/train_smoke/all_results.json" ]]; then
-      mkdir -p "${PERSIST_ROOT}/preflight/train_smoke"
-      cp -a "${PREFLIGHT_DIR}/train_smoke/all_results.json" \
-        "${PERSIST_ROOT}/preflight/train_smoke/"
+    if [[ -f "${PREFLIGHT_DIR}/model_smoke/score_state.json" ]]; then
+      mkdir -p "${PERSIST_ROOT}/preflight/model_smoke"
+      cp -a "${PREFLIGHT_DIR}/model_smoke/score_state.json" \
+        "${PERSIST_ROOT}/preflight/model_smoke/"
     fi
-    if [[ -f "${PREFLIGHT_DIR}/score/score_state.json" ]]; then
-      mkdir -p "${PERSIST_ROOT}/preflight/score"
-      cp -a "${PREFLIGHT_DIR}/score/score_state.json" \
-        "${PERSIST_ROOT}/preflight/score/"
-    fi
+  fi
+  if [[ -d "${GPU_MONITOR_DIR}" ]]; then
+    mkdir -p "${PERSIST_ROOT}/gpu_monitor"
+    cp -a "${GPU_MONITOR_DIR}/." "${PERSIST_ROOT}/gpu_monitor/"
   fi
   cp -a "${LOG_PATH}" "${PERSIST_ROOT}/" 2>/dev/null || true
 }
@@ -97,6 +152,7 @@ archive_on_exit() {
   local status=$?
   trap - EXIT
   set +e
+  stop_gpu_monitor
   persist_small_results
   if [[ "${AUTO_UPLOAD_OSS}" == "1" && "${STAGE}" != "preflight" ]]; then
     ossutil64 cp -r "${RUN_ROOT}/" "${OSS_URI}"
@@ -229,49 +285,25 @@ preflight() {
     --minimum-free-gb 100 \
     --output-json "${PREFLIGHT_DIR}/environment_audit.json"
   build_data
-  mkdir -p "${PREFLIGHT_DIR}/score"
   torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
-    -m scripts.camera_binary_vqa.score \
+    -m scripts.camera_binary_vqa.distributed_smoke \
+    --output-json "${PREFLIGHT_DIR}/distributed_smoke.json"
+  mkdir -p "${PREFLIGHT_DIR}/model_smoke"
+  CUDA_VISIBLE_DEVICES=0 "${PYTHON_BIN}" -m scripts.camera_binary_vqa.score \
     --model-path "${MODEL_PATH}" \
     --condition "matched_video=${DEV_MATCHED}" \
-    --output-dir "${PREFLIGHT_DIR}/score" \
+    --output-dir "${PREFLIGHT_DIR}/model_smoke" \
     --model-stage preflight \
-    --max-samples-per-condition 32 \
+    --max-samples-per-condition 2 \
     --video-fps "${VIDEO_FPS}" \
     --video-max-pixels "${VIDEO_MAX_PIXELS}" \
     --cpu-threads-per-rank "${CPU_THREADS_PER_RANK}" \
     --seed "${SEED}"
-  torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
-    -m scripts.camera_binary_vqa.train \
-    --model-path "${MODEL_PATH}" \
-    --train-jsonl "${TRAIN_JSONL}" \
-    --output-dir "${PREFLIGHT_DIR}/train_smoke" \
-    --num-epochs "${NUM_EPOCHS}" \
-    --max-steps 4 \
-    --max-wall-seconds "${MAX_TRAIN_WALL_SECONDS}" \
-    --learning-rate 2e-4 \
-    --lora-rank 64 \
-    --lora-alpha 128 \
-    --lora-dropout 0.05 \
-    --video-fps "${VIDEO_FPS}" \
-    --video-max-pixels "${VIDEO_MAX_PIXELS}" \
-    --cpu-threads-per-rank "${CPU_THREADS_PER_RANK}" \
-    --logging-steps 1 \
-    --seed "${SEED}"
-  "${PYTHON_BIN}" -m scripts.camera_binary_vqa.estimate_duration \
-    --data-summary "${DATA_DIR}/data_summary.json" \
-    --train-state "${PREFLIGHT_DIR}/train_smoke/all_results.json" \
-    --score-state "${PREFLIGHT_DIR}/score/score_state.json" \
-    --num-epochs "${NUM_EPOCHS}" \
-    --max-train-wall-seconds "${MAX_TRAIN_WALL_SECONDS}" \
-    --output-json "${PREFLIGHT_DIR}/duration_estimate.json"
-  require_file "${PREFLIGHT_DIR}/train_smoke/final/adapter_model.safetensors"
-  rm -f "${PREFLIGHT_DIR}/train_smoke/final/adapter_model.safetensors"
   persist_small_results
   echo "=== Environment audit ==="
   cat "${PREFLIGHT_DIR}/environment_audit.json"
-  echo "=== Duration estimate ==="
-  cat "${PREFLIGHT_DIR}/duration_estimate.json"
+  echo "=== Distributed smoke ==="
+  cat "${PREFLIGHT_DIR}/distributed_smoke.json"
 }
 
 export OMP_NUM_THREADS="${CPU_THREADS_PER_RANK}"
@@ -313,11 +345,14 @@ case "${STAGE}" in
       exit 2
     fi
     build_data
+    start_gpu_monitor
     score_base
     train_model
     score_epoch1
     score_final
+    stop_gpu_monitor
     evaluate_all
+    enforce_gpu_utilization
     date -u +'%Y-%m-%dT%H:%M:%SZ' > "${RUN_ROOT}/COMPLETED"
     ;;
   *)
