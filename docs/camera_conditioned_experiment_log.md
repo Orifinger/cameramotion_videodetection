@@ -666,7 +666,11 @@ DataA 的同一 case 中，Real 与 Fake 来自相同源视频、相同全局相
 
 结论标记：`未通过`。相机补偿改善了一部分 patch 级空间排序和 IoU，但直接用已补偿局部 patch 分数聚合视频判别时，整体与复杂运动 AUC 显著下降，并出现 Fake recall 86.83%、Real recall 18.81% 的强 Fake 偏置。因此该结果不能支持“相机补偿局部轨迹提高 AIGC 视频检测”，也不进入 DataB、Qwen、SFT 或 RL 扩展。
 
-当前仍有一个严格限时的低成本复核方向：保留更强的全局轨迹判别，仅把 aligned/unaligned 局部分数作为辅助，分别做相同容量的验证集拟合分数融合。它只使用现有 849M 特征，不重跑 RAFT/DINO；若 `global+aligned` 不能稳定优于 `global+unaligned` 和 global-only，则停止当前几何相机补偿主路线。OSS 上传是否完成：`待补充`，目前只收到目标根路径。
+当前仍有一个严格限时的低成本复核方向：保留更强的全局轨迹判别，仅把 aligned/unaligned 局部分数作为辅助，分别做相同容量的验证集拟合分数融合。它只使用现有 849M 特征，不重跑 RAFT/DINO；若 `global+aligned` 不能稳定优于 `global+unaligned` 和 global-only，则停止当前几何相机补偿主路线。
+
+正式特征已由用户确认上传至 `oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/camera_flow/camera_flow_probe_40step_v3/full/features/`。上传对象数量和远端总字节数未单独提供，不作猜测。
+
+2026-07-12 融合首次执行未形成结果：服务器部署目录不是 Git 仓库，`git pull` 失败，随后仍运行旧版 `train_probe.py`；旧 summary 没有 `fusion_gate`，读取时报 `KeyError: 'fusion_gate'`。该事件标记为环境部署问题，不是融合实验失败，不记录融合指标。
 
 ### 立即下一步
 
