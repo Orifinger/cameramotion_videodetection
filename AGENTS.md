@@ -67,3 +67,10 @@ Do not paste large raw logs into the experiment log when a compact metric table 
 - Store small, formal, reusable artifacts on NAS under the project directory when practical. This includes JSON/JSONL manifests, split definitions, YAML configs, CSV metrics, audit summaries, Markdown records, and compact logs.
 - Produce large formal artifacts in `/tmp` for speed. Once an expensive artifact passes its audit and will be reused, explicitly remind the user to upload it to OSS before the container can be lost. Do not assume the OSS upload has happened; record its OSS location in a small NAS manifest when the user provides it.
 - Before giving execution commands, classify each important output as disposable validation output, persistent small metadata, or reusable large artifact, and choose `/tmp`, NAS, or `/tmp` plus an OSS reminder accordingly.
+
+## Server Compute Policy
+
+- The normal full-scale server allocation is 16 GPUs with 96 GB memory per GPU and 96 physical CPU cores / 192 hardware threads.
+- For formal extraction, inference, and other case-shardable workloads, use all 16 GPUs by default unless the method or reproducibility requirements make that unsafe. Small smoke tests may use one GPU.
+- Judge utilization by end-to-end throughput and bottlenecks, not by trying to fill all GPU memory. Increase inference batch sizes only after a representative timing run shows a worthwhile gain without OOM or output-contract changes.
+- Avoid CPU oversubscription across 16 worker processes. Budget CPU threads against 96 physical cores, measure decoding and preprocessing throughput, and do not assume that using all 192 hardware threads is faster.
