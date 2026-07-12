@@ -9,7 +9,17 @@ from pathlib import Path
 
 from scripts.camera_pretext_transfer.runtime import multilabel_metrics
 from scripts.caspr_gate1.runtime import read_jsonl, write_json
-from tools.build_camera_pretext_transfer_gate import CAMERA_LABEL_ORDER
+
+CAMERA_LABEL_ORDER = [
+    "very-unsteady", "unsteady", "minimal-shaking", "no-shaking",
+    "complex-motion", "minor-motion", "no-motion",
+    "fast-speed", "regular-speed", "slow-speed",
+    "dolly-in", "dolly-out", "truck-left", "truck-right",
+    "pedestal-up", "pedestal-down", "pan-left", "pan-right",
+    "tilt-up", "tilt-down", "roll-CW", "roll-CCW", "zoom-in", "zoom-out",
+    "arc-CW", "arc-CCW", "side-tracking", "lead-tracking", "tail-tracking",
+    "aerial-tracking", "arc-tracking", "pan-tracking", "tilt-tracking",
+]
 
 
 def load_predictions(path: str | Path) -> list[dict]:
