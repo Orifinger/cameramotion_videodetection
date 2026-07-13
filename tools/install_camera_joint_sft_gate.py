@@ -114,9 +114,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     destination = args.llamafactory_data_dir.resolve()
-    destination.mkdir(parents=True, exist_ok=True)
+    if not destination.is_dir():
+        raise FileNotFoundError(f"LlamaFactory data directory does not exist: {destination}")
     dataset_info_path = destination / "dataset_info.json"
-    dataset_info = read_json(dataset_info_path) if dataset_info_path.is_file() else {}
+    if not dataset_info_path.is_file():
+        raise FileNotFoundError(
+            f"Refusing to create a new dataset_info.json outside a verified LlamaFactory tree: "
+            f"{dataset_info_path}"
+        )
+    dataset_info = read_json(dataset_info_path)
     if not isinstance(dataset_info, dict):
         raise ValueError(f"dataset_info must be an object: {dataset_info_path}")
 

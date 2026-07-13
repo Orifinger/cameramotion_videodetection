@@ -66,9 +66,11 @@ STAGE=preflight bash "$RUN"
 若 LlamaFactory 使用另一套位置：
 
 ```bash
-LLAMAFACTORY_ROOT=/input/training/LlamaFactory/LlamaFactory \
+LLAMAFACTORY_ROOT=/input/workflow_58770161/workspace/test/test_selfcot/Skyra/train/LLaMA-Factory \
 STAGE=preflight bash "$RUN"
 ```
+
+脚本会优先自动识别上述 `Skyra/train/LLaMA-Factory`，并在屏幕上打印最终选中的 root 和 data 目录。`build` 只允许更新已经存在的 `data/dataset_info.json`，不会在错误路径新建空目录。
 
 当前环境只需要既有 LlamaFactory、PEFT、`qwen_vl_utils` 和 `transformers==4.57.3`。本轮不需要下载 RAFT、DINOv2、SEA-RAFT、额外 reward model 或新仓库。
 

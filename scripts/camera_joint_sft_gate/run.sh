@@ -24,6 +24,7 @@ FORCE_TORCHRUN="${FORCE_TORCHRUN:-1}"
 
 if [[ -z "${LLAMAFACTORY_ROOT:-}" ]]; then
   for candidate in \
+    /input/workflow_58770161/workspace/test/test_selfcot/Skyra/train/LLaMA-Factory \
     /input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory \
     /input/training/LlamaFactory/LlamaFactory
   do
@@ -76,6 +77,13 @@ adapter_file_check() {
   fi
 }
 
+require_llamafactory_layout() {
+  require_dir "${LLAMAFACTORY_ROOT}"
+  require_dir "${LLAMAFACTORY_DATA_DIR}"
+  require_file "${LLAMAFACTORY_DATA_DIR}/dataset_info.json"
+  require_file "${LLAMAFACTORY_ROOT}/examples/deepspeed/ds_z2_config.json"
+}
+
 persist_small_results() {
   mkdir -p "${PERSIST_ROOT}"
   for file in \
@@ -99,22 +107,22 @@ persist_small_results() {
 }
 
 preflight() {
+  echo "LlamaFactory root: ${LLAMAFACTORY_ROOT}"
+  echo "LlamaFactory data: ${LLAMAFACTORY_DATA_DIR}"
   require_dir "${MODEL_PATH}"
   require_file "${MODEL_PATH}/config.json"
   require_file "${DATAA_DETECTION_JSON}"
   require_file "${DATAA_CAMERA_JSONL}"
   require_file "${DATAB_DETECTION_JSON}"
   require_file "${DATAB_CAMERA_JSONL}"
-  require_dir "${LLAMAFACTORY_ROOT}"
-  require_dir "${LLAMAFACTORY_DATA_DIR}"
-  require_file "${LLAMAFACTORY_DATA_DIR}/dataset_info.json"
-  require_file "${LLAMAFACTORY_ROOT}/examples/deepspeed/ds_z2_config.json"
+  require_llamafactory_layout
   command -v "${LLAMAFACTORY_CLI}" >/dev/null
   "${PYTHON_BIN}" -c 'import peft, qwen_vl_utils, torch, transformers, yaml; print("Python dependencies: OK"); print("transformers:", transformers.__version__); print("gpus:", torch.cuda.device_count())'
   echo "Preflight passed. No model loading or inference was run."
 }
 
 build_data() {
+  require_llamafactory_layout
   mkdir -p "${DATA_DIR}"
   if [[ "${CHECK_IMAGES}" == "1" ]]; then
     "${PYTHON_BIN}" tools/build_camera_joint_sft_gate.py \
