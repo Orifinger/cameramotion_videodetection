@@ -18,7 +18,8 @@
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
 | 2026-07-12 | 相机分层同源配对独立判别最小验证 | 未通过，当前配对排序配方停止 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | Pair margin 被优化但 AUC 仅增 0.46 点、pair accuracy 仅增 1.56 点、复杂运动 AUC 仅增 0.27 点，bootstrap 跨 0；不进入 VIF 与 camera pretext |
 | 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 阶段一未通过，当前 camera-label SFT 前置路线停止 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 四轮 correct 的 bucket balanced accuracy 仅 33.25%–35.98%，预测 266–283/321 为 complex-motion；确认多数类塌缩，不进入阶段二 |
-| 2026-07-13 | DataA 平衡二元相机问答与视觉依赖门 | 检测模型起点通过；通用模型起点待结果 | 把每个相机 primitive 拆成平衡 Yes/No 问题，验证通用起点和检测起点能否从原视频真正学到相机运动，而不是背标签先验 | 检测模型起点最终 macro AP 81.70%、Balanced ACC 73.33%，并明显优于未训练起点、无视频和对立标签视频；允许进入联合辅助训练设计，但需先完成通用起点横向比较 |
+| 2026-07-13 | DataA 平衡二元相机问答与视觉依赖门 | 检测模型起点通过；通用模型起点运行中 | 把每个相机 primitive 拆成平衡 Yes/No 问题，验证通用起点和检测起点能否从原视频真正学到相机运动，而不是背标签先验 | 检测模型起点最终 macro AP 81.70%、Balanced ACC 73.33%，并明显优于未训练起点、无视频和对立标签视频；主线已进入检测保留诊断，通用起点只作后补谱系消融 |
+| 2026-07-13 | 相机二元问答适配器的原检测提示词保留诊断 | 准备执行 | 只训练 camera VQA 的 LoRA 挂回检测模型后，在无 camera 文本的原检测任务中是否明显损伤 DataA 检测和解释格式 | 同一 40step_v3 固定开发集上重跑原 checkpoint 与 camera 模型；结果决定联合训练是否必须使用强 detection replay，不等待通用起点结果 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -1016,6 +1017,35 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 结论标记：`通过`。该结果建立“DataB detection SFT 起点可以通过平衡二元 VQA 从原视频学到具有视觉依赖性的 camera-motion 能力”，并否定此前完整标签集 SFT 失败可外推为“当前模型学不会 camera motion”的解释。它不建立 AIGC 检测提升、检测能力保留或外部 CameraBench 泛化，因为训练和开发均来自 DataA/CameraBench train 分布，且当前开发身份已参与项目内多次诊断。
 
 立即下一步：先完成通用 Qwen3-VL 起点的同协议结果并做横向比较；随后对现有 detection-start camera adapter 做无 camera 文本的 DataA/VIF-Bench 检测保留诊断。只有确认保留代价后，才固定一个联合 `detection replay + binary camera auxiliary` 训练配方和等步数 detection-only 对照；不把 camera caption 作为检测推理输入，也不在本结果上直接启动 DPO/GRPO。
+
+2026-07-13 调度更正：通用起点同协议实验继续在原服务器独立运行，但不再阻塞主线。空闲的第二套 16 GPU 先执行第 14 节的 DataA 原提示词检测保留诊断；更正原因是检测起点已经以较大余量通过相机能力门，当前更关键的不确定性转为 camera-only LoRA 对既有检测输出的直接影响。
+
+## 14. 相机二元问答适配器的原检测提示词保留诊断
+
+### 这个实验测什么
+
+在 detection checkpoint 已经学会视觉依赖的相机二元问答后，检查最终 camera LoRA 是否能在不提供任何 camera 文本的原始 DataA 检测 prompt 下保留真假分类、Real/Fake 成对正确率和解释证据格式。这是联合辅助训练前的能力保留诊断，不是 camera 提升检测的方法实验。
+
+### 模型、数据与单一改变因素
+
+- 原始模型：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
+- Camera 模型：同一原始模型合并 `/tmp/1res/dataa_camera_binary_vqa/detection_checkpoint_start/train/final`。
+- Detection 数据：`/input/workflow_58770161/workspace/test/cameramotion_det/res/dataA_v1/autolabel/dataa_vace_grounded_cot_40step_v3_sft_clean.json`。
+- 固定开发身份：`/input/workflow_58770161/workspace/test/cameramotion_det/tools/data/camera_motion_splits/dataA_test.json` 中 321 个 case；构建器必须得到 321 个完整 Real/Fake pair、642 条记录。
+- 唯一改变因素是是否挂载最终 binary-camera LoRA。两者使用相同 16 帧、原 detection system/user prompt、图像像素上限、贪心生成和评测脚本；推理不加入 camera caption、labels、bbox、mask 或光流。
+- 执行说明：`docs/camera_detection_retention_gate_20260713.md`。
+
+### 主要设置与验收标准
+
+- 16 GPU 推理，默认每卡 2 个独立生成进程、共 32 个数据分片；`image_max_pixels=262144`、`max_new_tokens=2048`、`prompt_mode=record`。
+- 两个模型覆盖率均不低于 99%，camera 模型 `<answer>` 格式有效率不低于 95%。
+- Camera 模型相对原 checkpoint 的 Balanced ACC、Fake F1、pair accuracy 各下降不超过 3 个百分点。
+- 解释 evidence 输出率、temporal IoU、bbox IoU 和 Evidence@0.3 全部报告，但不作为当前硬门，因为起点在 DataA 上的证据指标本身较低。
+- 通过只表示直接能力保留，不表示 camera 改善检测；未通过也不否定 camera 能力，而是要求联合训练显式混入 detection replay，不能继续把 camera-only adapter 当检测模型。
+
+### 泄漏、分布与下一步
+
+固定 321 个 DataA case 已被项目多次用于诊断，只称开发集；它们与 camera VQA 的 759 个训练 case 按 case 隔离，但不属于全新论文测试。当前只测 DataA，VIF-Bench 保留尚未测试。结果通过后进入等步数 `detection-only` 与 `detection replay + binary camera auxiliary` 最小联合训练门；结果未通过则仍进入该联合门，但提高 replay 约束并把保留作为硬指标。通用 Qwen3-VL 起点结果可后补为模型谱系消融，不阻塞本实验。
 
 ## 记录维护说明
 
