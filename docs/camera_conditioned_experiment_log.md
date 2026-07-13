@@ -18,7 +18,7 @@
 | 2026-07-12 | 相机补偿局部感知轨迹最小验证 | 直接探针与融合复核均未通过，路线停止 | 在相同密集原视频帧和局部 mask 监督下，显式相机补偿是否稳定优于未补偿局部轨迹 | 直接 aligned 检测显著退化；`global+aligned` 又低于 global-only 和 `global+unaligned`，五项融合验收全失败，不再追加 anchor/RAFT/融合试参 |
 | 2026-07-12 | 相机分层同源配对独立判别最小验证 | 未通过，当前配对排序配方停止 | Real/Fake 分别独立计算 verdict 分数时，增加同源配对排序是否优于等数据、等步数的普通二分类续训 | Pair margin 被优化但 AUC 仅增 0.46 点、pair accuracy 仅增 1.56 点、复杂运动 AUC 仅增 0.27 点，bootstrap 跨 0；不进入 VIF 与 camera pretext |
 | 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 阶段一未通过，当前 camera-label SFT 前置路线停止 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 四轮 correct 的 bucket balanced accuracy 仅 33.25%–35.98%，预测 266–283/321 为 complex-motion；确认多数类塌缩，不进入阶段二 |
-| 2026-07-13 | DataA 平衡二元相机问答与视觉依赖门 | 待执行 | 把每个相机 primitive 拆成平衡 Yes/No 问题，验证通用起点和检测起点能否从原视频真正学到相机运动，而不是背标签先验 | 两套 16 GPU 仅改变起始 checkpoint；明日依据正确视频、对立标签视频置换和无视频三条件决定是否进入联合检测辅助训练 |
+| 2026-07-13 | DataA 平衡二元相机问答与视觉依赖门 | 检测模型起点通过；通用模型起点待结果 | 把每个相机 primitive 拆成平衡 Yes/No 问题，验证通用起点和检测起点能否从原视频真正学到相机运动，而不是背标签先验 | 检测模型起点最终 macro AP 81.70%、Balanced ACC 73.33%，并明显优于未训练起点、无视频和对立标签视频；允许进入联合辅助训练设计，但需先完成通用起点横向比较 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -969,6 +969,53 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 - 逐样本分数、数据摘要、训练日志和 gate summary 属于持久化小结果，脚本退出时复制到 `/input/workflow_58770161/workspace/test/cameramotion_det/res/dataa_camera_binary_vqa/<运行名>/`。
 - 第一轮和最终 LoRA adapter 属于可能复用的大结果，保存在 `/tmp/1res/dataa_camera_binary_vqa/<运行名>/`，脚本退出时自动上传到 `oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/dataa_camera_binary_vqa/<运行名>/`。
 - 明日先比较两个 `gate_summary.json`；只有至少检测起点通过，或通用起点明显通过且检测起点失败的原因可修复，才设计无 GT camera 文本的联合检测辅助训练。今晚不并行投机运行联合检测、DPO、GRPO 或完整 VIF-Bench。
+
+### 2026-07-13 检测模型起点正式结果
+
+这次实际测试的是：从完整 DataB 检测 SFT checkpoint 出发，只用 DataA real 视频的平衡二元相机问答训练 LoRA，模型能否在 case-level 隔离的 321 个开发视频上学习相机 primitive，并在移除视频或替换为相反标签视频时出现符合因果预期的性能下降。
+
+结果来源：
+
+- NAS 小结果：`/input/workflow_58770161/workspace/test/cameramotion_det/res/dataa_camera_binary_vqa/detection_checkpoint_start/`。
+- OSS 运行目录：`oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/dataa_camera_binary_vqa/detection_checkpoint_start/`。
+- 本地结果包：`E:/newgaibeishi/detection_checkpoint_start_results.tar.gz`。
+- 核心汇总：`eval/gate_summary.json`；逐阶段评测：`eval/base.json`、`eval/epoch1.json`、`eval/final.json`；训练曲线：`train/trainer_log.jsonl`。
+
+#### 数据与训练完成性
+
+| 项目 | 结果 |
+|---|---:|
+| DataA train / dev cases | 759 / 321 |
+| train/dev case 交集 | 0 |
+| 支持的 camera primitives | 32；`very-unsteady` 因无正例排除 |
+| 平衡训练记录 | 5652；Yes/No 各 2826 |
+| 每个开发条件记录 | 2002 |
+| 训练步数 | 1770/1770，5.0 epochs |
+| LoRA / 学习率 | rank 64，alpha 128，`2e-4` |
+| 训练耗时 | 2863.8 秒；总模型设置加训练 2911.9 秒 |
+| 16 GPU 计算阶段平均利用率 | 74.13% |
+
+训练 loss 从首步 `0.3493` 下降到末步 `0.0580`，全程无非有限 loss 或 OOM；最终停止原因为 `planned_steps_completed`。GPU 计算阶段不足完整两小时，因此没有完整两小时窗口，但 56 次采样的平均利用率为 74.13%，不构成服务器低利用率风险。
+
+#### 主指标与视觉控制
+
+| 模型/输入条件 | Balanced ACC | Overall AP | Macro AP | ROC-AUC | Paired question ACC |
+|---|---:|---:|---:|---:|---:|
+| 未训练检测起点 + 正确视频 | 58.94% | 61.45% | 68.32% | 63.57% | 27.17% |
+| 训练 1 epoch + 正确视频 | 50.05% | 57.58% | 60.76% | 59.74% | 0.50% |
+| 训练 5 epochs + 正确视频 | 73.33% | 80.65% | 81.70% | 81.09% | 53.25% |
+| 训练 5 epochs + 对立标签视频 | 26.67% | 34.16% | 36.87% | 18.91% | 6.59% |
+| 训练 5 epochs + 无视频 | 50.00% | 50.00% | 50.00% | 50.00% | 0.00% |
+
+预设检查全部通过：最终 macro AP 相对未训练起点提高 `13.38` 点；正确视频 Balanced ACC 相对无视频提高 `23.33` 点、相对对立标签视频提高 `46.65` 点。对立标签视频把同一 primitive 的 Yes/No 配对视频互换后，最终模型的 Yes/No 均值分数和混淆方向几乎精确反转；无视频时两类分数分布相同并回到随机水平。这比单纯“训练后测试更高”更强地说明模型实际依赖视频内容，而不是只背固定问题或回答先验。
+
+逐 primitive 结果也不是少数大类驱动：32 类中 31 类最终 AP 不低于 65%，27 类相对未训练起点提高。当前最弱类别是 `truck-left`，AP 59.27%；`tilt-down`、`fast-speed`、`pan-tracking`、`tail-tracking` 和 `truck-left` 五类未超过各自起点，其中若干开发正负对只有 5 至 22 对，逐类差值仍受小样本波动影响。
+
+第一轮 checkpoint 几乎全部回答 `No`：2002 条中只有 9 条预测为 Yes，paired question accuracy 仅 0.50%。但其 AP/ROC-AUC 仍高于随机，说明早期模型已经存在较弱排序信号，只是零阈值严重失准；随后继续训练到 5 轮才形成清晰的正负间隔。因此旧版 24/48 步或一轮即停的能力门不足以否定相机能力可学，本轮保存第一轮并继续到固定终点的设计是必要的。
+
+结论标记：`通过`。该结果建立“DataB detection SFT 起点可以通过平衡二元 VQA 从原视频学到具有视觉依赖性的 camera-motion 能力”，并否定此前完整标签集 SFT 失败可外推为“当前模型学不会 camera motion”的解释。它不建立 AIGC 检测提升、检测能力保留或外部 CameraBench 泛化，因为训练和开发均来自 DataA/CameraBench train 分布，且当前开发身份已参与项目内多次诊断。
+
+立即下一步：先完成通用 Qwen3-VL 起点的同协议结果并做横向比较；随后对现有 detection-start camera adapter 做无 camera 文本的 DataA/VIF-Bench 检测保留诊断。只有确认保留代价后，才固定一个联合 `detection replay + binary camera auxiliary` 训练配方和等步数 detection-only 对照；不把 camera caption 作为检测推理输入，也不在本结果上直接启动 DPO/GRPO。
 
 ## 记录维护说明
 
