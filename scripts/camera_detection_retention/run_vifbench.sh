@@ -17,10 +17,17 @@ MERGED_MODEL_DIR="${MERGED_MODEL_DIR:-${RUN_ROOT}/models/camera_binary_merged}"
 V4TRAIN_EVAL_DIR="${V4TRAIN_EVAL_DIR:-${PROJECT_ROOT}/eval/v4train-main/eval}"
 INFER_SCRIPT="${INFER_SCRIPT:-${V4TRAIN_EVAL_DIR}/infer2_5_3.sh}"
 OFFICIAL_EVAL_PY="${OFFICIAL_EVAL_PY:-${V4TRAIN_EVAL_DIR}/eval.py}"
-INDEX_DIR="${INDEX_DIR:-${V4TRAIN_EVAL_DIR}/test_index_splits/splits_16}"
 PROMPT_DIR="${PROMPT_DIR:-${V4TRAIN_EVAL_DIR}/prompts/camera_context}"
 SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-${PROMPT_DIR}/datab_detection_system_prompt.txt}"
 USER_PROMPT_SUFFIX_FILE="${USER_PROMPT_SUFFIX_FILE:-${PROMPT_DIR}/datab_no_camera_user_suffix.txt}"
+
+if [[ -z "${INDEX_DIR:-}" ]]; then
+  INDEX_DIR="${V4TRAIN_EVAL_DIR}/test_index_splits/splits_16"
+  V4TRAIN_ROOT_INDEX_DIR="$(dirname "${V4TRAIN_EVAL_DIR}")/test_index_splits/splits_16"
+  if [[ ! -d "${INDEX_DIR}" && -d "${V4TRAIN_ROOT_INDEX_DIR}" ]]; then
+    INDEX_DIR="${V4TRAIN_ROOT_INDEX_DIR}"
+  fi
+fi
 
 BASE_MODEL_NAME="${BASE_MODEL_NAME:-Qwen3-VL-8B-detection-base-vifbench-retention}"
 CAMERA_MODEL_NAME="${CAMERA_MODEL_NAME:-Qwen3-VL-8B-camera-adapter-vifbench-retention}"

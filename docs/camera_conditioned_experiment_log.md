@@ -1120,7 +1120,7 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 - 状态：`准备执行`。
 - 原始模型：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
 - Camera 模型：同一模型合并 `/tmp/1res/dataa_camera_binary_vqa/detection_checkpoint_start/train/final`。
-- 测试数据：VIF-Bench 当前 16 个 index shard 指向的抽帧数据；服务器入口为 `/input/workflow_58770161/workspace/test/cameramotion_det/eval/v4train-main/eval/test_index_splits/splits_16`，逐源视频数量由预检审计记录，当前不猜测。
+- 测试数据：VIF-Bench 当前 16 个 index shard 指向的抽帧数据；当前服务器入口为 `/input/workflow_58770161/workspace/test/cameramotion_det/eval/v4train-main/test_index_splits/splits_16`，逐源视频数量由预检审计记录，当前不猜测。
 - 推理与官方评测：同一目录的 `infer2_5_3.sh` 与 `eval.py`。
 - 执行说明：`docs/vifbench_camera_adapter_retention_gate_20260713.md`。
 
@@ -1143,6 +1143,8 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 VIF-Bench 没有参加 DataA camera adapter 训练，因此可作为适配器训练之外的外部分布保留诊断；但项目此前已经多次查看 VIF-Bench 指标，所以不能称为全新的论文最终 held-out model-selection test。训练接收 camera VQA 监督而本次检测推理不接收 camera 文本，这里是有意进行的无 camera 文本能力保留压力测试，不能描述为 camera-conditioned 方法结果。
 
 立即下一步：与第 14 节 DataA 结果组成二维决策。两者都保留时进入等步数联合辅助训练；仅 DataA 下降时加强 DataA detection replay；仅 VIF-Bench 下降时加强 DataB replay；两者都下降时停止顺序叠加 camera adapter，先做带明确 detection replay 的小规模联合训练门，不直接启动大规模联合训练或 RL。
+
+2026-07-13 路径更正：首次预检发现当前 V4Train 副本的 `test_index_splits` 位于 `v4train-main/` 根目录而不是其 `eval/` 子目录；已修正记录并让 runner 自动兼容两种布局。该更正只影响文件发现，不改变数据、提示词或实验定义。
 
 ## 记录维护说明
 

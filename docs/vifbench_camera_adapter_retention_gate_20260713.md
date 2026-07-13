@@ -11,6 +11,7 @@
 - 原检测 checkpoint：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
 - 相机 LoRA：`/tmp/1res/dataa_camera_binary_vqa/detection_checkpoint_start/train/final`。
 - V4Train 评测目录：`/input/workflow_58770161/workspace/test/cameramotion_det/eval/v4train-main/eval`。
+- 当前服务器 VIF-Bench 分片目录：`/input/workflow_58770161/workspace/test/cameramotion_det/eval/v4train-main/test_index_splits/splits_16`；runner 同时兼容分片位于评测目录内部的旧布局。
 - 原检测推理脚本：上述目录中的 `infer2_5_3.sh`。
 - 原官方配对评测：上述目录中的 `eval.py`。
 - 临时运行目录：`/tmp/1res/camera_detection_retention/vifbench_detection_checkpoint_start`。
