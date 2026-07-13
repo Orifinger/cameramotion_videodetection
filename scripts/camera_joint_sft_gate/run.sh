@@ -24,17 +24,29 @@ FORCE_TORCHRUN="${FORCE_TORCHRUN:-1}"
 
 if [[ -z "${LLAMAFACTORY_ROOT:-}" ]]; then
   for candidate in \
-    /input/workflow_58770161/workspace/test/test_selfcot/Skyra/train/LLaMA-Factory \
     /input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory \
+    /input/workflow_58770161/workspace/test/test_selfcot/Skyra/train/LLaMA-Factory \
     /input/training/LlamaFactory/LlamaFactory
   do
-    if [[ -d "${candidate}" ]]; then
+    if [[ -f "${candidate}/examples/deepspeed/ds_z2_config.json" ]]; then
       LLAMAFACTORY_ROOT="${candidate}"
       break
     fi
   done
 fi
 LLAMAFACTORY_ROOT="${LLAMAFACTORY_ROOT:-/input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory}"
+if [[ -z "${LLAMAFACTORY_DATA_DIR:-}" ]]; then
+  for candidate in \
+    /input/workflow_58770161/workspace/test/test_selfcot/Skyra/train/LLaMA-Factory/data \
+    "${LLAMAFACTORY_ROOT}/data" \
+    /input/training/LlamaFactory/LlamaFactory/data
+  do
+    if [[ -f "${candidate}/dataset_info.json" ]]; then
+      LLAMAFACTORY_DATA_DIR="${candidate}"
+      break
+    fi
+  done
+fi
 LLAMAFACTORY_DATA_DIR="${LLAMAFACTORY_DATA_DIR:-${LLAMAFACTORY_ROOT}/data}"
 
 DATAA_DETECTION_JSON="${DATAA_DETECTION_JSON:-${PROJECT_ROOT}/res/dataA_v1/autolabel/dataa_vace_grounded_cot_40step_v3_sft_clean.json}"

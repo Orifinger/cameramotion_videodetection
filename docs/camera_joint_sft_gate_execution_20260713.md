@@ -63,14 +63,15 @@ RUN=scripts/camera_joint_sft_gate/run.sh
 STAGE=preflight bash "$RUN"
 ```
 
-若 LlamaFactory 使用另一套位置：
+当前服务器的 LlamaFactory 代码根目录与数据目录分开放置，显式写法为：
 
 ```bash
-LLAMAFACTORY_ROOT=/input/workflow_58770161/workspace/test/test_selfcot/Skyra/train/LLaMA-Factory \
+LLAMAFACTORY_ROOT=/input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory \
+LLAMAFACTORY_DATA_DIR=/input/workflow_58770161/workspace/test/test_selfcot/Skyra/train/LLaMA-Factory/data \
 STAGE=preflight bash "$RUN"
 ```
 
-脚本会优先自动识别上述 `Skyra/train/LLaMA-Factory`，并在屏幕上打印最终选中的 root 和 data 目录。`build` 只允许更新已经存在的 `data/dataset_info.json`，不会在错误路径新建空目录。
+脚本分别通过 `examples/deepspeed/ds_z2_config.json` 和已有 `dataset_info.json` 自动识别代码根目录与数据目录，并在屏幕上打印最终选择。`build` 只允许更新已经存在的 `dataset_info.json`，不会在错误路径新建空目录。
 
 当前环境只需要既有 LlamaFactory、PEFT、`qwen_vl_utils` 和 `transformers==4.57.3`。本轮不需要下载 RAFT、DINOv2、SEA-RAFT、额外 reward model 或新仓库。
 
