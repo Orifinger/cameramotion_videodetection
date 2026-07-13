@@ -1,0 +1,51 @@
+### model
+model_name_or_path: /tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115
+image_max_pixels: 262144
+video_max_pixels: 16384
+trust_remote_code: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.05
+lora_target: all
+freeze_vision_tower: true
+freeze_multi_modal_projector: true
+freeze_language_model: false
+deepspeed: /input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory/examples/deepspeed/ds_z2_config.json
+flash_attn: fa2
+
+### dataset
+dataset_dir: /input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory/data
+dataset: camera_joint_correct_camera_smoke
+template: qwen3_vl
+cutoff_len: 49152
+packing: false
+max_samples: 96
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 8
+
+### output
+output_dir: /tmp/1res/camera_joint_sft_gate/smoke
+logging_steps: 1
+save_steps: 10
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: true
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 5.0e-6
+max_steps: 2
+lr_scheduler_type: cosine
+warmup_ratio: 0.0
+bf16: true
+gradient_checkpointing: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null

@@ -21,6 +21,7 @@
 | 2026-07-13 | DataA 平衡二元相机问答与视觉依赖门 | 通过；两个模型起点均完成 | 把每个相机 primitive 拆成平衡 Yes/No 问题，验证通用起点和检测起点能否从原视频真正学到相机运动，而不是背标签先验 | 通用/检测起点最终 macro AP 分别为 83.52%/81.70%，均通过视觉控制；没有证据支持检测 SFT 造成灾难性相机能力遗忘，主线继续使用检测起点并进入检测保留诊断 |
 | 2026-07-13 | 相机二元问答适配器的原检测提示词保留诊断 | 未通过；确认 Yes/No 接口接管 | 只训练 camera VQA 的 LoRA 挂回检测模型后，在无 camera 文本的原检测任务中是否明显损伤 DataA 检测和解释格式 | 原模型格式有效率 99.84%，camera 模型 642/642 均无法解析为 Real/Fake；原始回复是字面 `Yes/No`，确认 camera 单任务 LoRA 覆盖检测输出契约，后续必须联合混入 detection replay |
 | 2026-07-13 | VIF-Bench 相机适配器外部分布检测保留诊断 | 结论不足；Base 基线完成，Camera 未执行 | 同一 camera-only LoRA 是否在无 camera 文本的 VIF-Bench 原检测协议中损伤全生成视频检测能力 | 严格同提示词 Base 基线为 Balanced ACC 79.18%、Fake F1 80.47%；Camera 因半成品合并模型加载失败而无预测，且 DataA 已确认接口接管，不再为该顺序配方补跑全量 VIF |
+| 2026-07-13 | 同 16 帧二元相机辅助与检测回放联合训练三分支验证 | 代码已就绪，待服务器执行 | 在相同 16 帧输入和检测回放下，正确二元相机监督是否比逐条翻转监督及仅检测对照学到视觉相关能力，同时保留检测接口 | 尚无模型结果；已完成 40step_v3 case split、全量平衡二元 VQA、1:1 检测 replay、三分支等量训练和视觉/RL 前置验收代码 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -1207,6 +1208,70 @@ VIF-Bench 没有参加 DataA camera adapter 训练，因此可作为适配器训
 Camera 未执行的直接原因是：第一次 adapter merge 在写出权重分片后因 `mistral_common`/Transformers 的 processor 加载冲突中止，旧 runner 随后只凭 `config.json` 复用了半成品目录；16 个 Camera 进程均因 `text_config.rope_scaling=None` 在构造模型时失败，预测文件数为 0。该问题属于运行基础设施失败，不是 Camera 模型的 VIF 分数。代码已改为临时目录原子合并、processor/config 审计和 `.merge_complete` 标记，防止再次复用半成品。
 
 结论标记：`结论不足`。Base 基线有效；Camera retention 没有被测试。由于第 14 节已经在 642 条 DataA 原检测提示样本上确认 camera-only LoRA 的 Yes/No 接口接管，继续为同一顺序配方重跑 3160 条 Camera VIF 推理的信息增量不足，因此不补跑 Camera 全量分支。该 Base 结果作为下一轮 `detection replay + binary camera auxiliary` 联合模型的严格 VIF 控制值。
+
+## 16. 同 16 帧二元相机辅助与检测回放联合训练三分支验证
+
+### 这个实验测什么
+
+从完整 DataB 检测 checkpoint 出发，让二元相机 VQA 与检测任务使用同一套 16 帧视觉序列，比较仅检测回放、正确相机监督和逐条翻转相机监督三个等记录数、等训练步数分支。它先验证正确监督是否比错误监督学到视觉相关相机能力并保留 Real/Fake 检测接口，再用 `pass@8` 与组内奖励方差判断是否值得进入短程 GRPO。第一轮尚不执行 RL。
+
+### 日期、状态与模型谱系
+
+- 日期：2026-07-13。
+- 状态：`代码已就绪，待服务器构造数据和执行`。
+- 三个分支共同起点：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
+- 训练方式：Qwen3-VL-8B LoRA-SFT，冻结视觉塔与多模态投影层，训练语言侧 LoRA。
+- 完整执行说明：`docs/camera_joint_sft_gate_execution_20260713.md`。
+
+### 数据与准确路径
+
+- DataA detection：`/input/workflow_58770161/workspace/test/cameramotion_det/res/dataA_v1/autolabel/dataa_vace_grounded_cot_40step_v3_sft_clean.json`。
+- DataA camera labels/caption：`/input/workflow_58770161/workspace/test/cameramotion_det/camera/camerajson/dataa_cameramotion_labels_40step_v3.jsonl`。其中 labels 构造二元监督；caption 只写入 split 审计，不作为本轮训练目标。
+- DataA 视觉输入：由上述 detection JSON 指向 `/tmp/cameramotion_det/dataA_v1/autolabel/dataa_vace_grounded_cot_frames_40step_v3` 下的每例 16 帧。
+- DataB detection replay：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/detection/v4vif_2766busterall_trainall.json`。
+- DataB camera 伪标签：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/datab_cameramotion_labels_final/datab_cameramotion_labels_v2.jsonl`，只用于 replay 分层采样，不进入 detection prompt。
+- DataA 按 case、VACE 来源和 coarse motion bucket 做 70:30 分层划分；real/fake pair 不得跨 split。正式构建要求 1080 个完整 case，旧 split 不复用。
+- 检测评测：DataA 新 test split 与 VIF-Bench；相机评测：DataA 新 test split 的 real 16 帧。
+
+### 三个分支和单一改变因素
+
+| 中文分支 | 训练内容 | 作用 |
+|---|---|---|
+| 仅检测回放分支 | DataA train detection + DataB detection replay + 等量额外 detection | 控制继续训练、样本数和计算量 |
+| 正确相机监督分支 | 相同 detection pool + 全部可平衡 primitive 的正确 Yes/No 相机样本 | 要验证的相机辅助条件 |
+| 翻转相机监督分支 | 相同 detection pool + 问题和 16 帧不变、每条 Yes/No 答案翻转 | 排除任务格式、相机任务数量和计算量造成的假提升 |
+
+正确与翻转分支逐条使用相同问题和相同 16 帧，答案必定相反；原数据每个 primitive 的 Yes/No 本身平衡，因此翻转后总体答案边际完全不变。每个 primitive 只使用一个固定问题，不把同一视频复制成 25 个提示词版本。检测 prompt 保持原样，训练和检测推理均不向 detection user prompt 注入 camera 文本。
+
+### 主要训练和评测设置
+
+- 相机分支使用每个 primitive 的全部可平衡 Yes/No 样本；检测 pool 在 DataA train 与 DataB replay 的基础上确定性过采样到与相机记录 1:1。仅检测分支再用等量检测样本替换相机槽位，因此三分支记录数完全相同。
+- 本地旧 1076-case 真实结构干跑为 5528 条相机记录、5528 条检测记录、每分支 11056 条；正式 1080-case 数量以服务器审计为准，不把本地旧数据数字登记为正式实验结果。
+- LoRA rank 64、alpha 128、dropout 0.05、学习率 `2e-4`、5 epochs、16 GPU、每卡 batch 1、梯度累积 1、cosine scheduler、warmup 0.03、bf16，按 epoch 保存。
+- 使用 5 epochs 的依据是第 13 节同协议真实结果：第 1 epoch 尚未学稳，第 5 epoch 才以较大余量通过相机视觉依赖门。使用 1014 条相机样本训练 1 epoch 会把监督不足混入方法判断，故不作为正式默认值。
+- 相机训练输出严格为 `Yes` 或 `No`。评测直接比较 Yes/No token logit，报告 Overall/Macro AP、Balanced ACC、ROC-AUC 和 paired question accuracy，不依赖自由生成格式。
+- 视觉依赖控制分别换入同问题下相反答案的视频帧和移除全部帧；RL 就绪度对每例采样 8 次，报告正确答案 `pass@8`、两个动作探索率和组内奖励方差。
+- DataA/VIF 检测推理使用原检测 prompt，且不提供任何 camera label/caption。
+
+### 验收标准
+
+- 数据完整性：1080 case、train/test 无交集、pair 不跨 split、train/dev 至少 20 个相机 primitive 有正负支持、三分支等量、翻转后 Yes/No 边际不变、无 detection prompt camera 文本泄漏。
+- 正确相机监督相对翻转监督的 Macro AP 提高至少 3 点，或 Balanced ACC 提高至少 5 点。
+- 正确分支在匹配帧相对相反答案帧的 Balanced ACC 至少下降 10 点，或相对无帧至少下降 8 点，证明回答依赖视觉而不是固定问题先验。
+- RL 可验证奖励为严格 Yes/No 格式 `0.1` 加正确答案 `0.9`；就绪度要求留出覆盖完整、`pass@8` 存在正确动作，并且至少 20% 样本具有非恒定组内奖励。边界情况只允许短程 GRPO，不启动全量 RL。
+- DataA 与 VIF-Bench 检测指标和格式必须完整报告。检测提点是强正信号，但不是本轮 SFT 的单独硬门；严重接口接管或正确分支明显差于两个控制则不进入 RL。
+
+### 泄漏、分布差异与已知限制
+
+- 起始 checkpoint 已见过完整 DataB，故 DataB 只能作为检测回放，任何 DataB 内部高指标都不称为 held-out。
+- DataA test 未被起始 DataB checkpoint 训练，但会用于本轮方案选择，因此称开发留出集，不直接包装为最终论文测试集。
+- VIF-Bench 没有参与本轮训练，可作为外部分布保留比较；但项目已多次查看其结果，最终论文仍需明确其开发使用历史。
+- DataA camera labels 的来源质量继承 CameraBench 标注流程；正确优于翻转只能证明监督包含可利用视觉信息，不自动证明相机运动已改善真假检测。Caption 本轮不参与训练，避免把不可验证的长文本质量混入第一门。
+- 训练提供 camera 辅助目标，检测推理不提供 camera 文本；这是内部能力注入设计，不是缺失 camera 条件的压力测试。
+
+### 立即下一步
+
+先在服务器执行只检查文件的 preflight，再构造正式 1080-case split 并检查审计 JSON。审计通过后运行三个 5-epoch LoRA-SFT 分支；先完成相机能力、翻转监督、视觉依赖和 `pass@8`，随后做 DataA 无相机文本检测保留。只有正确分支同时通过这些条件，才运行三分支 VIF-Bench 和短程 GRPO。当前没有模型结果，不提前填写通过或失败。
 
 ## 记录维护说明
 

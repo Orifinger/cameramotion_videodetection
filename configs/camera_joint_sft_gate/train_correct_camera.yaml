@@ -1,0 +1,53 @@
+### model
+model_name_or_path: /tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115
+image_max_pixels: 262144
+video_max_pixels: 16384
+trust_remote_code: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 64
+lora_alpha: 128
+lora_dropout: 0.05
+lora_target: all
+freeze_vision_tower: true
+freeze_multi_modal_projector: true
+freeze_language_model: false
+deepspeed: /input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory/examples/deepspeed/ds_z2_config.json
+flash_attn: fa2
+
+### dataset
+dataset_dir: /input/workflow_58770161/workspace/test/test_selfcot/LlamaFactory/LlamaFactory/data
+dataset: camera_joint_correct_camera
+template: qwen3_vl
+cutoff_len: 49152
+packing: false
+max_samples: 20000
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 16
+
+### output
+output_dir: /tmp/1res/camera_joint_sft_gate/train/correct_camera
+logging_dir: /tmp/1res/camera_joint_sft_gate/train/correct_camera
+logging_steps: 10
+save_strategy: epoch
+save_total_limit: 6
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: tensorboard
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 2.0e-4
+num_train_epochs: 5.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null
