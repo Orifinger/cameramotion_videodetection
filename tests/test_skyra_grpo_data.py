@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
-from scripts.skyra_grpo_diagnostics.build_datab_verl import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+from skyra_grpo_diagnostics.build_datab_verl import (
     select_user_frame_lines,
     uniform_indices,
 )
