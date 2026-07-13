@@ -59,7 +59,7 @@ dataset_preflight() {
     --verl-root "${VERL_ROOT}" \
     --model-path "${MODEL_PATH}" \
     --train-parquet "${TRAIN_PARQUET}" \
-    --output-json "${RUN_ROOT}/verl_dataset_preflight.json"
+    --output-json "${PERSIST_ROOT}/verl_dataset_preflight.json"
 }
 
 summarize() {
