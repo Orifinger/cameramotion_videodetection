@@ -76,8 +76,9 @@ train() {
   export VLLM_ALLREDUCE_USE_SYMM_MEM=0
   export TOKENIZERS_PARALLELISM=false
   export TENSORBOARD_DIR="${PERSIST_ROOT}/tensorboard"
-  export RAY_TMPDIR="${RAY_TMPDIR:-/tmp/sg_$$}"
+  export RAY_TMPDIR="/tmp/sg_$$"
   mkdir -p "${TENSORBOARD_DIR}" "${RUN_ROOT}/rollouts" "${RUN_ROOT}/checkpoints" "${RAY_TMPDIR}"
+  echo "Using RAY_TMPDIR=${RAY_TMPDIR}"
 
   printf '%s\n' \
     "run_name=${RUN_NAME}" \
