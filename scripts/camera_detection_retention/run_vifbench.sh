@@ -14,6 +14,7 @@ ADAPTER_PATH="${ADAPTER_PATH:-/tmp/1res/dataa_camera_binary_vqa/detection_checkp
 RUN_ROOT="${RUN_ROOT:-/tmp/1res/camera_detection_retention/vifbench_detection_checkpoint_start}"
 PERSIST_ROOT="${PERSIST_ROOT:-${PROJECT_ROOT}/res/camera_detection_retention/vifbench_detection_checkpoint_start}"
 MERGED_MODEL_DIR="${MERGED_MODEL_DIR:-${RUN_ROOT}/models/camera_binary_merged}"
+MERGED_MODEL_MARKER="${MERGED_MODEL_DIR}/.merge_complete"
 V4TRAIN_EVAL_DIR="${V4TRAIN_EVAL_DIR:-${PROJECT_ROOT}/eval/v4train-main/eval}"
 INFER_SCRIPT="${INFER_SCRIPT:-${V4TRAIN_EVAL_DIR}/infer2_5_3.sh}"
 OFFICIAL_EVAL_PY="${OFFICIAL_EVAL_PY:-${V4TRAIN_EVAL_DIR}/eval.py}"
@@ -115,18 +116,41 @@ preflight() {
     --expected-ranks "${NUM_GPUS}" \
     --check-frame-dirs
   "${PYTHON_BIN}" -c "import numpy, peft, sklearn, torch, transformers; assert torch.cuda.device_count() == ${NUM_GPUS}; print('GPU and Python runtime: OK')"
+  MODEL_PATH="${MODEL_PATH}" "${PYTHON_BIN}" -c 'import os; from scripts.caspr_gate1.runtime import load_processor; load_processor(os.environ["MODEL_PATH"]); print("Base processor load: OK")'
   echo "Preflight passed. No model inference was run."
 }
 
 merge_camera_adapter() {
-  if [[ "${REBUILD_MERGED}" != "1" && -f "${MERGED_MODEL_DIR}/config.json" ]]; then
+  if [[ "${REBUILD_MERGED}" != "1" && -f "${MERGED_MODEL_MARKER}" && -f "${MERGED_MODEL_DIR}/config.json" ]]; then
     echo "Reusing merged model: ${MERGED_MODEL_DIR}"
     return
   fi
+  local build_parent="${RUN_ROOT}/models"
+  local build_dir
+  mkdir -p "${build_parent}"
+  build_dir="$(mktemp -d "${build_parent}/camera_binary_merged.build.XXXXXX")"
   "${PYTHON_BIN}" -m scripts.caspr_gate1.merge_adapter \
     --model-path "${MODEL_PATH}" \
     --adapter-path "${ADAPTER_PATH}" \
-    --output-dir "${MERGED_MODEL_DIR}"
+    --output-dir "${build_dir}"
+  MERGED_MODEL_AUDIT_PATH="${build_dir}" "${PYTHON_BIN}" -c '
+import os
+from transformers import AutoConfig, AutoProcessor
+path = os.environ["MERGED_MODEL_AUDIT_PATH"]
+config = AutoConfig.from_pretrained(path, trust_remote_code=True)
+text_config = getattr(config, "text_config", None)
+if text_config is not None and getattr(text_config, "rope_scaling", None) is None:
+    raise ValueError("merged text_config.rope_scaling is None")
+AutoProcessor.from_pretrained(path, trust_remote_code=True)
+print("Merged model config and processor audit: OK")
+'
+  touch "${build_dir}/.merge_complete"
+  if [[ -e "${MERGED_MODEL_DIR}" ]]; then
+    local incomplete_backup="${MERGED_MODEL_DIR}.incomplete.$(date +%Y%m%d_%H%M%S)"
+    echo "Moving existing unverified merged directory to: ${incomplete_backup}"
+    mv "${MERGED_MODEL_DIR}" "${incomplete_backup}"
+  fi
+  mv "${build_dir}" "${MERGED_MODEL_DIR}"
 }
 
 infer_one() {
@@ -200,6 +224,22 @@ evaluate_all() {
   persist_small_results
 }
 
+evaluate_base_only() {
+  mkdir -p "${EVAL_ROOT}" "${COMBINED_DIR}"
+  "${PYTHON_BIN}" -m scripts.camera_detection_retention.vifbench_retention evaluate-one \
+    --index-dir "${INDEX_DIR}" \
+    --prediction-dir "${BASE_PRED_DIR}" \
+    --merged-json "${BASE_MERGED_JSON}" \
+    --eval-json "${BASE_EVAL_JSON}" \
+    --expected-ranks "${NUM_GPUS}"
+  "${PYTHON_BIN}" "${OFFICIAL_EVAL_PY}" --json_file_path "${BASE_MERGED_JSON}" \
+    | tee "${EVAL_ROOT}/base_official_eval.log"
+  cp -a "${BASE_MERGED_JSON%.json}_paired_metrics_transposed.csv" \
+    "${EVAL_ROOT}/base_official_paired_metrics.csv"
+  persist_small_results
+  echo "Base-only VIF-Bench evaluation completed. No camera retention conclusion was produced."
+}
+
 launch_keepalive() {
   if [[ "${KEEP_ALIVE_AFTER_RUN}" != "1" ]]; then
     return
@@ -231,6 +271,9 @@ case "${STAGE}" in
   eval)
     evaluate_all
     ;;
+  eval_base)
+    evaluate_base_only
+    ;;
   all)
     preflight
     merge_camera_adapter
@@ -239,7 +282,7 @@ case "${STAGE}" in
     launch_keepalive
     ;;
   *)
-    echo "STAGE must be preflight, merge, infer, eval, or all" >&2
+    echo "STAGE must be preflight, merge, infer, eval, eval_base, or all" >&2
     exit 2
     ;;
 esac

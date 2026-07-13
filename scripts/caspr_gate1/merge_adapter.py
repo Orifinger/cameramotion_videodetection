@@ -19,12 +19,13 @@ def main() -> None:
     parser.add_argument("--attn-implementation", default="")
     args = parser.parse_args()
     output_dir = Path(args.output_dir)
+    processor = load_processor(args.model_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     model = load_model(args.model_path, args.attn_implementation, torch.bfloat16)
     model = attach_adapter(model, args.adapter_path)
     model = model.merge_and_unload()
     model.save_pretrained(output_dir, safe_serialization=True, max_shard_size="5GB")
-    load_processor(args.model_path).save_pretrained(output_dir)
+    processor.save_pretrained(output_dir)
     print(f"Merged model saved to {output_dir}")
 
 

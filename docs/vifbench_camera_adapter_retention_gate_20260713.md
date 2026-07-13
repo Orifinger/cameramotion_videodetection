@@ -36,6 +36,8 @@ bash scripts/camera_detection_retention/run_vifbench.sh
 
 预检会验证 16 个 index shard、索引中全部帧目录、模型和 adapter、V4Train 推理与评测脚本、16 张 GPU，并保存 system prompt 与 no-camera user suffix 的 SHA-256。`camera_context_provided` 必须为 `false`，user suffix 中不得含 camera placeholder。
 
+runner 只复用带 `.merge_complete` 标记且通过配置与 processor 审计的合并模型。合并先写入临时目录；若 processor、`rope_scaling` 或任一步骤失败，半成品不会覆盖正式目录，也不会在下次运行时被误判为可用模型。
+
 ## 正式后台执行
 
 ```bash
@@ -88,3 +90,11 @@ cat /input/workflow_58770161/workspace/test/cameramotion_det/res/camera_detectio
 ```
 
 还会保留两个模型各自的详细评测 JSON、官方 CSV 和官方 eval log。需要解释结果时，优先提供上述 summary；如果未通过，再补充两个详细评测 JSON。
+
+如果 camera 分支在模型加载前失败、但 base 的 16 个 rank 已全部完成，可只合并并评测 base，不重跑推理：
+
+```bash
+STAGE=eval_base bash scripts/camera_detection_retention/run_vifbench.sh
+```
+
+该阶段只生成并持久化 base 详细 JSON、官方 CSV 和 eval log，不会伪造 camera retention summary。

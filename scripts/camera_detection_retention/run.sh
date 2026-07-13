@@ -16,6 +16,7 @@ ADAPTER_PATH="${ADAPTER_PATH:-/tmp/1res/dataa_camera_binary_vqa/detection_checkp
 RUN_ROOT="${RUN_ROOT:-/tmp/1res/camera_detection_retention/detection_checkpoint_start}"
 PERSIST_ROOT="${PERSIST_ROOT:-${PROJECT_ROOT}/res/camera_detection_retention/detection_checkpoint_start}"
 MERGED_MODEL_DIR="${MERGED_MODEL_DIR:-${RUN_ROOT}/models/camera_binary_merged}"
+MERGED_MODEL_MARKER="${MERGED_MODEL_DIR}/.merge_complete"
 V4TRAIN_EVAL_DIR="${V4TRAIN_EVAL_DIR:-/input/workflow_58770161/workspace/test/test_selfcot/Skyra/eval}"
 
 DATAA_DETECTION_JSON="${DATAA_DETECTION_JSON:-${PROJECT_ROOT}/res/dataA_v1/autolabel/dataa_vace_grounded_cot_40step_v3_sft_clean.json}"
@@ -107,16 +108,38 @@ preflight() {
 }
 
 merge_camera_adapter() {
-  if [[ "${REBUILD_MERGED}" != "1" && -f "${MERGED_MODEL_DIR}/config.json" ]]; then
+  if [[ "${REBUILD_MERGED}" != "1" && -f "${MERGED_MODEL_MARKER}" && -f "${MERGED_MODEL_DIR}/config.json" ]]; then
     echo "Reusing merged model: ${MERGED_MODEL_DIR}"
     return
   fi
   require_dir "${MODEL_PATH}"
   require_dir "${ADAPTER_PATH}"
+  local build_parent="${RUN_ROOT}/models"
+  local build_dir
+  mkdir -p "${build_parent}"
+  build_dir="$(mktemp -d "${build_parent}/camera_binary_merged.build.XXXXXX")"
   "${PYTHON_BIN}" -m scripts.caspr_gate1.merge_adapter \
     --model-path "${MODEL_PATH}" \
     --adapter-path "${ADAPTER_PATH}" \
-    --output-dir "${MERGED_MODEL_DIR}"
+    --output-dir "${build_dir}"
+  MERGED_MODEL_AUDIT_PATH="${build_dir}" "${PYTHON_BIN}" -c '
+import os
+from transformers import AutoConfig, AutoProcessor
+path = os.environ["MERGED_MODEL_AUDIT_PATH"]
+config = AutoConfig.from_pretrained(path, trust_remote_code=True)
+text_config = getattr(config, "text_config", None)
+if text_config is not None and getattr(text_config, "rope_scaling", None) is None:
+    raise ValueError("merged text_config.rope_scaling is None")
+AutoProcessor.from_pretrained(path, trust_remote_code=True)
+print("Merged model config and processor audit: OK")
+'
+  touch "${build_dir}/.merge_complete"
+  if [[ -e "${MERGED_MODEL_DIR}" ]]; then
+    local incomplete_backup="${MERGED_MODEL_DIR}.incomplete.$(date +%Y%m%d_%H%M%S)"
+    echo "Moving existing unverified merged directory to: ${incomplete_backup}"
+    mv "${MERGED_MODEL_DIR}" "${incomplete_backup}"
+  fi
+  mv "${build_dir}" "${MERGED_MODEL_DIR}"
 }
 
 run_inference() {

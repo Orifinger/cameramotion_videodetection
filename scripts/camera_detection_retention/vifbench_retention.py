@@ -394,6 +394,16 @@ def run_evaluate(args: argparse.Namespace) -> None:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
+def run_evaluate_one(args: argparse.Namespace) -> None:
+    index = load_index(args.index_dir, args.expected_ranks, check_frame_dirs=False)
+    rows, prediction_files = load_predictions(args.prediction_dir)
+    write_json(args.merged_json, rows)
+    result = evaluate_predictions(rows, index["expected"])
+    result["prediction_files"] = prediction_files
+    write_json(args.eval_json, result)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -422,6 +432,14 @@ def parse_args() -> argparse.Namespace:
     evaluate.add_argument("--max-accuracy-drop", type=float, default=0.03)
     evaluate.add_argument("--max-f1-drop", type=float, default=0.03)
     evaluate.set_defaults(func=run_evaluate)
+
+    evaluate_one = subparsers.add_parser("evaluate-one")
+    evaluate_one.add_argument("--index-dir", required=True)
+    evaluate_one.add_argument("--prediction-dir", required=True)
+    evaluate_one.add_argument("--merged-json", required=True)
+    evaluate_one.add_argument("--eval-json", required=True)
+    evaluate_one.add_argument("--expected-ranks", type=int, default=16)
+    evaluate_one.set_defaults(func=run_evaluate_one)
     return parser.parse_args()
 
 
