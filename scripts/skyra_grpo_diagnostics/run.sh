@@ -49,7 +49,7 @@ patch_verl() {
 
 reward_tests() {
   cd "${ROOT}"
-  python3 -m unittest tests.test_skyra_grpo_reward tests.test_skyra_grpo_data
+  python3 -m unittest discover -s tests -p 'test_skyra_grpo_*.py'
 }
 
 dataset_preflight() {
