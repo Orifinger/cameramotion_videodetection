@@ -20,6 +20,7 @@
 | 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 阶段一未通过，当前 camera-label SFT 前置路线停止 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 四轮 correct 的 bucket balanced accuracy 仅 33.25%–35.98%，预测 266–283/321 为 complex-motion；确认多数类塌缩，不进入阶段二 |
 | 2026-07-13 | DataA 平衡二元相机问答与视觉依赖门 | 通过；两个模型起点均完成 | 把每个相机 primitive 拆成平衡 Yes/No 问题，验证通用起点和检测起点能否从原视频真正学到相机运动，而不是背标签先验 | 通用/检测起点最终 macro AP 分别为 83.52%/81.70%，均通过视觉控制；没有证据支持检测 SFT 造成灾难性相机能力遗忘，主线继续使用检测起点并进入检测保留诊断 |
 | 2026-07-13 | 相机二元问答适配器的原检测提示词保留诊断 | 准备执行 | 只训练 camera VQA 的 LoRA 挂回检测模型后，在无 camera 文本的原检测任务中是否明显损伤 DataA 检测和解释格式 | 同一 40step_v3 固定开发集上重跑原 checkpoint 与 camera 模型；结果决定联合训练是否必须使用强 detection replay，不等待通用起点结果 |
+| 2026-07-13 | VIF-Bench 相机适配器外部分布检测保留诊断 | 准备执行 | 同一 camera-only LoRA 是否在无 camera 文本的 VIF-Bench 原检测协议中损伤全生成视频检测能力 | 与 DataA 保留诊断并行；同提示词重跑原 checkpoint 与 camera 模型，联合两项结果决定 DataA/DataB detection replay 配比 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -1104,6 +1105,44 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 ### 泄漏、分布与下一步
 
 固定 321 个 DataA case 已被项目多次用于诊断，只称开发集；它们与 camera VQA 的 759 个训练 case 按 case 隔离，但不属于全新论文测试。当前只测 DataA，VIF-Bench 保留尚未测试。结果通过后进入等步数 `detection-only` 与 `detection replay + binary camera auxiliary` 最小联合训练门；结果未通过则仍进入该联合门，但提高 replay 约束并把保留作为硬指标。通用 Qwen3-VL 起点结果可后补为模型谱系消融，不阻塞本实验。
+
+2026-07-13 并行调度更正：第 14 节 DataA 保留诊断已在第一台服务器执行；第二台服务器并行执行第 15 节 VIF-Bench 外部分布保留诊断。更正原因是 VIF-Bench 诊断不依赖 DataA 结果，且能独立区分局部编辑检测遗忘与通用全生成视频检测遗忘。
+
+## 15. VIF-Bench 相机适配器外部分布检测保留诊断
+
+### 这个实验测什么
+
+比较原始 DataB 检测 SFT checkpoint 与合并最终 DataA 平衡二元相机问答 LoRA 后的模型，在 VIF-Bench 原检测协议上的能力差异。它回答 camera-only adapter 是否损伤既有全生成视频检测能力；不是 camera 改善检测的实验，也不向推理提供任何 camera 文本。
+
+### 状态、模型与数据
+
+- 日期：2026-07-13。
+- 状态：`准备执行`。
+- 原始模型：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
+- Camera 模型：同一模型合并 `/tmp/1res/dataa_camera_binary_vqa/detection_checkpoint_start/train/final`。
+- 测试数据：VIF-Bench 当前 16 个 index shard 指向的抽帧数据；服务器入口为 `/input/workflow_58770161/workspace/test/cameramotion_det/eval/v4train-main/eval/test_index_splits/splits_16`，逐源视频数量由预检审计记录，当前不猜测。
+- 推理与官方评测：同一目录的 `infer2_5_3.sh` 与 `eval.py`。
+- 执行说明：`docs/vifbench_camera_adapter_retention_gate_20260713.md`。
+
+### 单一改变因素与主要设置
+
+- 唯一改变因素是是否合并最终 binary-camera LoRA；两个模型使用完全相同的 VIF-Bench index、16 帧输入、确定性生成、system prompt 和 no-camera user suffix。
+- `PROMPT_MODE=no_camera`，不传 `CAMERA_CONTEXT_JSONL`；预检保存两个 prompt 文件的 SHA-256，并拒绝 user suffix 中的 camera placeholder。
+- 16 GPU；默认原模型和 camera 模型并行，每张 96G GPU 各一个模型进程，共两个推理进程。若运行时不兼容可设 `PARALLEL_MODELS=0` 顺序运行，实验定义不变。
+- 原始逐样本预测、合并模型和合并预测放在 `/tmp/1res/camera_detection_retention/vifbench_detection_checkpoint_start`；只把审计、评测 JSON/CSV 和 pipeline log 持久化到 `/input/workflow_58770161/workspace/test/cameramotion_det/res/camera_detection_retention/vifbench_detection_checkpoint_start`。
+
+### 验收标准
+
+- 两个模型预测覆盖率均至少 99%，`<answer>` 格式有效率均至少 99%，并覆盖相同且非空的生成模型子集。
+- Camera 模型相对原模型的跨生成模型平均 Balanced ACC 和 Fake F1 降幅各不超过 3 个百分点。
+- 同时报告每个生成模型的 ACC、Fake Recall、Fake F1 变化；逐生成模型下降暂不设硬阈值，防止小子集波动替代总体判断。
+- 新汇总复刻原 `eval.py` 将非 Real 输出编码为 Fake 的官方口径，同时单列格式有效率和 strict-valid pair 指标，避免格式错误被掩盖。
+
+### 泄漏、分布差异与立即下一步
+
+VIF-Bench 没有参加 DataA camera adapter 训练，因此可作为适配器训练之外的外部分布保留诊断；但项目此前已经多次查看 VIF-Bench 指标，所以不能称为全新的论文最终 held-out model-selection test。训练接收 camera VQA 监督而本次检测推理不接收 camera 文本，这里是有意进行的无 camera 文本能力保留压力测试，不能描述为 camera-conditioned 方法结果。
+
+立即下一步：与第 14 节 DataA 结果组成二维决策。两者都保留时进入等步数联合辅助训练；仅 DataA 下降时加强 DataA detection replay；仅 VIF-Bench 下降时加强 DataB replay；两者都下降时停止顺序叠加 camera adapter，先做带明确 detection replay 的小规模联合训练门，不直接启动大规模联合训练或 RL。
 
 ## 记录维护说明
 
