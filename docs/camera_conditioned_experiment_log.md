@@ -20,7 +20,7 @@
 | 2026-07-12 | 正确相机能力学习与检测迁移闭环验证 | 阶段一未通过，当前 camera-label SFT 前置路线停止 | 先确认模型从视频学到正确相机运动，再检验该能力能否在无相机文本推理时迁移到局部编辑检测 | 四轮 correct 的 bucket balanced accuracy 仅 33.25%–35.98%，预测 266–283/321 为 complex-motion；确认多数类塌缩，不进入阶段二 |
 | 2026-07-13 | DataA 平衡二元相机问答与视觉依赖门 | 通过；两个模型起点均完成 | 把每个相机 primitive 拆成平衡 Yes/No 问题，验证通用起点和检测起点能否从原视频真正学到相机运动，而不是背标签先验 | 通用/检测起点最终 macro AP 分别为 83.52%/81.70%，均通过视觉控制；没有证据支持检测 SFT 造成灾难性相机能力遗忘，主线继续使用检测起点并进入检测保留诊断 |
 | 2026-07-13 | 相机二元问答适配器的原检测提示词保留诊断 | 未通过；确认 Yes/No 接口接管 | 只训练 camera VQA 的 LoRA 挂回检测模型后，在无 camera 文本的原检测任务中是否明显损伤 DataA 检测和解释格式 | 原模型格式有效率 99.84%，camera 模型 642/642 均无法解析为 Real/Fake；原始回复是字面 `Yes/No`，确认 camera 单任务 LoRA 覆盖检测输出契约，后续必须联合混入 detection replay |
-| 2026-07-13 | VIF-Bench 相机适配器外部分布检测保留诊断 | 准备执行 | 同一 camera-only LoRA 是否在无 camera 文本的 VIF-Bench 原检测协议中损伤全生成视频检测能力 | 与 DataA 保留诊断并行；同提示词重跑原 checkpoint 与 camera 模型，联合两项结果决定 DataA/DataB detection replay 配比 |
+| 2026-07-13 | VIF-Bench 相机适配器外部分布检测保留诊断 | 结论不足；Base 基线完成，Camera 未执行 | 同一 camera-only LoRA 是否在无 camera 文本的 VIF-Bench 原检测协议中损伤全生成视频检测能力 | 严格同提示词 Base 基线为 Balanced ACC 79.18%、Fake F1 80.47%；Camera 因半成品合并模型加载失败而无预测，且 DataA 已确认接口接管，不再为该顺序配方补跑全量 VIF |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -1151,7 +1151,7 @@ step 48 的 correct 相对 shuffled：格式有效率 `+4.98` 点、motion bucke
 ### 状态、模型与数据
 
 - 日期：2026-07-13。
-- 状态：`准备执行`。
+- 状态：`结论不足（Base 基线完成；Camera 分支未执行）`。
 - 原始模型：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
 - Camera 模型：同一模型合并 `/tmp/1res/dataa_camera_binary_vqa/detection_checkpoint_start/train/final`。
 - 测试数据：VIF-Bench 当前 16 个 index shard 指向的抽帧数据；当前服务器入口为 `/input/workflow_58770161/workspace/test/cameramotion_det/eval/v4train-main/test_index_splits/splits_16`，逐源视频数量由预检审计记录，当前不猜测。
@@ -1179,6 +1179,34 @@ VIF-Bench 没有参加 DataA camera adapter 训练，因此可作为适配器训
 立即下一步：与第 14 节 DataA 结果组成二维决策。两者都保留时进入等步数联合辅助训练；仅 DataA 下降时加强 DataA detection replay；仅 VIF-Bench 下降时加强 DataB replay；两者都下降时停止顺序叠加 camera adapter，先做带明确 detection replay 的小规模联合训练门，不直接启动大规模联合训练或 RL。
 
 2026-07-13 路径更正：首次预检发现当前 V4Train 副本的 `test_index_splits` 位于 `v4train-main/` 根目录而不是其 `eval/` 子目录；已修正记录并让 runner 自动兼容两种布局。该更正只影响文件发现，不改变数据、提示词或实验定义。
+
+### 2026-07-13 Base-only 正式结果与 Camera 未执行说明
+
+这次实际完成的是原 DataB 检测 checkpoint 在严格 `no_camera` prompt 下的 VIF-Bench 全量基线。16 个 rank 均完成，共得到 3160/3160 条匹配预测；Camera 分支在模型加载前失败，因此本结果只建立 Base 控制值，不建立 camera retention 差值。
+
+结果来源：
+
+- NAS：`/input/workflow_58770161/workspace/test/cameramotion_det/res/camera_detection_retention/vifbench_detection_checkpoint_start/eval/base_vifbench_eval.json`。
+- 官方日志与 CSV：同目录的 `base_official_eval.log`、`base_official_paired_metrics.csv`。
+- 终端结果附件：`C:/Users/29499/.codex/attachments/ba1f4532-2319-4bc2-83a9-86ef3a067305/pasted-text.txt`。
+
+| 项目 | Base 结果 |
+|---|---:|
+| 预期 / 实际 / 匹配预测 | 3160 / 3160 / 3160 |
+| 覆盖率 | 100.00% |
+| 格式有效率 | 99.97%（3159/3160） |
+| 生成模型子集 | 19 |
+| 跨生成模型平均 Balanced ACC | 79.18% |
+| 跨生成模型平均 Fake Recall | 89.33% |
+| 跨生成模型平均 Fake F1 | 80.47% |
+
+逐生成模型最难的两个子集是 `HunyuanVideo-I2V`（Balanced ACC 54.85%，Fake F1 47.72%）和 `Wan2.1-VACE-1.3B-T`（63.03%，60.90%）；较高的子集包括 `gen4-turbo`（84.82%，86.51%）、`kling-v1`（84.75%，86.60%）和 `pixverse-v4-5`（84.54%，86.46%）。完整 19 子集结果保留在 Base JSON，不在记录中重复展开。
+
+当前严格同提示词 Base 值低于旧记录的 ACC 83.96%/F1 84.72%约 4.78/4.25 点；这是不同提示词与当前严格协议之间的历史对照，不是模型参数变化的受控消融。后续联合模型必须与本次 Base 采用相同 prompt hash、index 和评测脚本，不能再拿旧数值作为直接控制组。
+
+Camera 未执行的直接原因是：第一次 adapter merge 在写出权重分片后因 `mistral_common`/Transformers 的 processor 加载冲突中止，旧 runner 随后只凭 `config.json` 复用了半成品目录；16 个 Camera 进程均因 `text_config.rope_scaling=None` 在构造模型时失败，预测文件数为 0。该问题属于运行基础设施失败，不是 Camera 模型的 VIF 分数。代码已改为临时目录原子合并、processor/config 审计和 `.merge_complete` 标记，防止再次复用半成品。
+
+结论标记：`结论不足`。Base 基线有效；Camera retention 没有被测试。由于第 14 节已经在 642 条 DataA 原检测提示样本上确认 camera-only LoRA 的 Yes/No 接口接管，继续为同一顺序配方重跑 3160 条 Camera VIF 推理的信息增量不足，因此不补跑 Camera 全量分支。该 Base 结果作为下一轮 `detection replay + binary camera auxiliary` 联合模型的严格 VIF 控制值。
 
 ## 记录维护说明
 
