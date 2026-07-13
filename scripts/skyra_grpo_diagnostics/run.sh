@@ -137,7 +137,7 @@ train() {
     actor_rollout_ref.rollout.max_num_batched_tokens=6144 \
     actor_rollout_ref.rollout.max_model_len=13056 \
     actor_rollout_ref.rollout.max_num_seqs=64 \
-    actor_rollout_ref.rollout.limit_images=16 \
+    +actor_rollout_ref.rollout.limit_images=16 \
     actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.top_p=0.95 \
     actor_rollout_ref.rollout.n="${GROUP_SIZE}" \
