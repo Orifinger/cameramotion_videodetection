@@ -87,7 +87,7 @@ preflight() {
   require_file "${SYSTEM_PROMPT_FILE}"
   require_file "${USER_PROMPT_SUFFIX_FILE}"
   require_file "${KEEP_ALIVE_SCRIPT}"
-  "${PYTHON_BIN}" -m scripts.camera_detection_retention.vifbench_retention audit \
+  "${PYTHON_BIN}" -m scripts.skyra_grpo_diagnostics.vifbench_eval audit \
     --index-dir "${INDEX_DIR}" \
     --system-prompt-file "${SYSTEM_PROMPT_FILE}" \
     --user-prompt-suffix-file "${USER_PROMPT_SUFFIX_FILE}" \
@@ -149,7 +149,7 @@ evaluate_one() {
   local merged_json="$2"
   local eval_json="$3"
   local official_log="$4"
-  "${PYTHON_BIN}" -m scripts.camera_detection_retention.vifbench_retention evaluate-one \
+  "${PYTHON_BIN}" -m scripts.skyra_grpo_diagnostics.vifbench_eval evaluate-one \
     --index-dir "${INDEX_DIR}" \
     --prediction-dir "${prediction_dir}" \
     --merged-json "${merged_json}" \
