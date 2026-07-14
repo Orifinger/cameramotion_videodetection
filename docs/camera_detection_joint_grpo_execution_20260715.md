@@ -29,10 +29,18 @@
 
 ```text
 tools/build_camera_detection_joint_grpo.py
+tools/build_camera_joint_sft_gate.py
+tools/audit_camera_pprl_smoke.py
 rl/camera_detection_rewards.py
 scripts/camera_detection_joint_grpo/__init__.py
 scripts/camera_detection_joint_grpo/run.sh
 scripts/camera_detection_joint_grpo/summarize.py
+scripts/camera_joint_sft_gate/summarize_dataa.py
+scripts/camera_joint_sft_gate/summarize_vif_four_model.py
+scripts/camera_detection_retention/run_vifbench.sh
+scripts/camera_detection_retention/vifbench_retention.py
+scripts/caspr_gate1/merge_adapter.py
+scripts/caspr_gate1/runtime.py
 prompts/camera_detection_joint_grpo/system_prompt.txt
 prompts/camera_detection_joint_grpo/user_suffix.txt
 docs/camera_detection_joint_grpo_execution_20260715.md

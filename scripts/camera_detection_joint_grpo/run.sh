@@ -122,8 +122,8 @@ training_type_option() {
   elif help_has "$1" --tuner_type; then
     echo --tuner_type
   else
-    echo "Neither --train_type nor --tuner_type is available in $1" >&2
-    exit 2
+    echo "No explicit LoRA type option is exposed in $1; using the ms-swift default LoRA tuner." >&2
+    echo ""
   fi
 }
 
@@ -295,7 +295,15 @@ preflight() {
   require_file "${DATAB_DETECTION_JSON}"
   require_file "${DATAB_CAMERA_JSONL}"
   require_file "tools/build_camera_detection_joint_grpo.py"
+  require_file "tools/build_camera_joint_sft_gate.py"
+  require_file "tools/audit_camera_pprl_smoke.py"
   require_file "rl/camera_detection_rewards.py"
+  require_file "scripts/caspr_gate1/merge_adapter.py"
+  require_file "scripts/caspr_gate1/runtime.py"
+  require_file "scripts/camera_joint_sft_gate/summarize_dataa.py"
+  require_file "scripts/camera_joint_sft_gate/summarize_vif_four_model.py"
+  require_file "scripts/camera_detection_retention/run_vifbench.sh"
+  require_file "scripts/camera_detection_retention/vifbench_retention.py"
   require_file "${SYSTEM_PROMPT_FILE}"
   require_file "${USER_PROMPT_SUFFIX_FILE}"
   require_file "${V4TRAIN_EVAL_DIR}/infer_dataa.py"
@@ -403,12 +411,14 @@ run_sft() {
   require_file "${help_file}"
   local type_option
   type_option="$(training_type_option "${help_file}")"
+  local -a tuning_args=()
+  if [[ -n "${type_option}" ]]; then tuning_args=("${type_option}" lora); fi
   local -a args=(
     sft
     --model "${CAMERA_START_MODEL}"
     --dataset "${dataset}"
     --split_dataset_ratio 0
-    "${type_option}" lora
+    "${tuning_args[@]}"
     --lora_rank "${SFT_LORA_RANK}"
     --lora_alpha "${SFT_LORA_ALPHA}"
     --target_modules all-linear
@@ -486,6 +496,8 @@ run_grpo() {
   require_file "${help_file}"
   local type_option
   type_option="$(training_type_option "${help_file}")"
+  local -a tuning_args=()
+  if [[ -n "${type_option}" ]]; then tuning_args=("${type_option}" lora); fi
   local -a rewards weights
   if [[ "${branch}" == "detection_only" ]]; then
     rewards=(joint_detection_acc joint_output_format)
@@ -503,7 +515,7 @@ run_grpo() {
     --reward_weights "${weights[@]}"
     --dataset "${dataset}"
     --split_dataset_ratio 0
-    "${type_option}" lora
+    "${tuning_args[@]}"
     --lora_rank "${GRPO_LORA_RANK}"
     --lora_alpha "${GRPO_LORA_ALPHA}"
     --target_modules all-linear
