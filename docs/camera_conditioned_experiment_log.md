@@ -6,7 +6,7 @@
 
 | 日期 | 中文实验名称 | 状态 | 这个实验测什么 | 当前结论 |
 |---|---|---|---|---|
-| 2026-07-08 | 完整 DataB 检测模型的 VIF-Bench 基线 | 已完成；训练来源审计已补充 | 仅使用自动标注检测数据训练后，在通用全生成视频测试集上的检测能力 | DataB 为 4000 条 ViF-CoT-4K 加 2766 条 GenBuster，后者含 1242 条官方 test 路径；ViF-Bench 只作开发 benchmark，GenBuster 未清洗测试不可作为外部结论 |
+| 2026-07-08 | 完整 DataB 检测模型的 VIF-Bench 基线 | 已完成；训练来源审计已补充 | 仅使用自动标注检测数据训练后，在通用全生成视频测试集上的检测能力 | DataB 为 4000 条 ViF-CoT-4K 加 2766 条 GenBuster；ViF-Bench 只作开发 benchmark，计划使用的独立 GenBuster-Bench `benchmark` 集须先通过精确零重叠审计 |
 | 2026-07-08 | DataA 与 DataB 混合检测续训 | 未通过 | 加入局部编辑 DataA 检测数据后，能否同时提高 DataA 并保持 VIF-Bench | DataA 没有形成可靠提升，VIF-Bench 明显下降 |
 | 2026-07-08 | DataA 与 DataB 相机条件化混合续训 | 未通过 | 在检测训练中加入相机条件后，是否优于普通混合续训 | 只有局部波动，没有稳定优于普通续训，VIF-Bench 仍明显下降 |
 | 2026-07-09 | 相机补偿局部残差探针 | 已停止 | 传统全局运动补偿后的局部残差能否区分 DataA 真/假视频 | 整体接近随机，不继续作为主方法 |
@@ -63,6 +63,8 @@
 | 总计 | 6766 |
 
 结论标记：`通过（数据谱系审计）`。未经排除精确视频 ID 的 GenBuster test 不能作为当前 checkpoint 的外部测试，因为至少 1242 条训练记录直接来自其 `test` 路径。ViF-CoT-4K 与 ViF-Bench 是 Skyra 定义的训练集/benchmark 组合，仍需对本地训练帧目录与本地 ViF-Bench test index 做精确 case ID 或视频哈希重叠审计；即使没有重叠，ViF-Bench 已在本项目中反复用于方法选择，因此后续定位为开发 benchmark，而不是未揭盲的最终测试集。
+
+2026-07-14 更正：计划用于论文评测的是 GenBuster-200K 中单独发布的 `benchmark` 集（GenBuster-Bench），不是上述 `train/test` 目录。上一段关于训练泄漏的否定只适用于直接拿已进入 DataB 的 `test` 视频评测，不能据此否定独立 `benchmark` 集。正式使用前仍必须比较 DataB 训练视频与 benchmark 的稳定视频 ID，并在可行时补内容哈希审计；零重叠后可将其作为外部测试。为避免继续发生测试集调参，ViF-Bench 用于开发筛选，GenBuster-Bench 应尽量保留到方法冻结后评测，并分开报告其 In-Domain、Out-of-Domain 与 In-the-Wild 轨道。
 
 ## 2. DataA 与 DataB 混合检测续训
 
