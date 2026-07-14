@@ -1,0 +1,1 @@
+First infer the global camera motion across these ordered frames. Then decide whether the video is Real or Fake from visual and temporal evidence. Camera motion alone is not evidence of authenticity.

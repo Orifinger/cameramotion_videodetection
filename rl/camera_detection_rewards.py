@@ -57,6 +57,12 @@ EXCLUDED_LABELS = {"static"}
 CAMERA_TAG_RE = re.compile(r"<camera_motion>\s*(.*?)\s*</camera_motion>", re.DOTALL | re.IGNORECASE)
 ANSWER_TAG_RE = re.compile(r"<answer>\s*(.*?)\s*</answer>", re.DOTALL | re.IGNORECASE)
 THINK_TAG_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL | re.IGNORECASE)
+JOINT_OUTPUT_RE = re.compile(
+    r"^\s*(?:<think>\s*</think>\s*)?"
+    r"<camera_motion>\s*(.*?)\s*</camera_motion>\s*"
+    r"<answer>\s*(Fake|Real)\s*</answer>\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -260,6 +266,18 @@ def detection_format_valid(prediction: Any) -> float:
     return float(parse_detection_answer(text) is not None)
 
 
+def joint_detection_format_valid(prediction: Any) -> float:
+    """Validate the short camera-intermediate plus detection output contract."""
+
+    text = completion_text(prediction)
+    if JOINT_OUTPUT_RE.fullmatch(text) is None:
+        return 0.0
+    parsed = parse_camera_completion(text)
+    if not parsed.valid or parsed.unknown or parsed.duplicate:
+        return 0.0
+    return float(parse_detection_answer(text) is not None)
+
+
 def _camera_truth_per_completion(value: Any, count: int) -> list[Any]:
     if count <= 0:
         return []
@@ -285,7 +303,8 @@ def _scalar_truth_per_completion(value: Any, count: int) -> list[Any]:
 
 class CameraSetF1Reward(ORM):
     def __call__(self, completions, **kwargs) -> list[float]:
-        truths = _camera_truth_per_completion(kwargs.get("camera_labels"), len(completions))
+        truth_value = kwargs.get("camera_labels_reward", kwargs.get("camera_labels"))
+        truths = _camera_truth_per_completion(truth_value, len(completions))
         return [camera_set_f1(pred, truth) for pred, truth in zip(completions, truths)]
 
 
@@ -314,13 +333,22 @@ class CameraBinaryFormatReward(ORM):
 
 class DetectionBinaryReward(ORM):
     def __call__(self, completions, **kwargs) -> list[float]:
-        truths = _scalar_truth_per_completion(kwargs.get("label"), len(completions))
+        truth_value = kwargs.get(
+            "detection_label",
+            kwargs.get("label", kwargs.get("solution", kwargs.get("answer"))),
+        )
+        truths = _scalar_truth_per_completion(truth_value, len(completions))
         return [detection_binary_correct(pred, truth) for pred, truth in zip(completions, truths)]
 
 
 class DetectionFormatReward(ORM):
     def __call__(self, completions, **kwargs) -> list[float]:
         return [detection_format_valid(pred) for pred in completions]
+
+
+class JointDetectionFormatReward(ORM):
+    def __call__(self, completions, **kwargs) -> list[float]:
+        return [joint_detection_format_valid(pred) for pred in completions]
 
 
 orms["camera_set_f1"] = CameraSetF1Reward
@@ -330,3 +358,5 @@ orms["camera_binary_acc"] = CameraBinaryReward
 orms["camera_binary_format"] = CameraBinaryFormatReward
 orms["detection_binary_acc"] = DetectionBinaryReward
 orms["detection_format"] = DetectionFormatReward
+orms["joint_detection_acc"] = DetectionBinaryReward
+orms["joint_output_format"] = JointDetectionFormatReward

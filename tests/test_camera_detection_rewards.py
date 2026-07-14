@@ -10,6 +10,7 @@ from rl.camera_detection_rewards import (
     CameraSetF1Reward,
     DetectionBinaryReward,
     DetectionFormatReward,
+    JointDetectionFormatReward,
     camera_binary_correct,
     camera_binary_format_valid,
     camera_exact_match,
@@ -17,6 +18,7 @@ from rl.camera_detection_rewards import (
     camera_set_f1,
     detection_binary_correct,
     detection_format_valid,
+    joint_detection_format_valid,
     parse_camera_binary_answer,
     parse_camera_completion,
 )
@@ -121,6 +123,42 @@ class DetectionRewardTests(unittest.TestCase):
         labels = ["Fake", "Fake"]
         self.assertEqual(DetectionBinaryReward()(completions, label=labels), [1.0, 0.0])
         self.assertEqual(DetectionFormatReward()(completions), [1.0, 1.0])
+
+    def test_joint_camera_then_detection_contract(self) -> None:
+        valid = (
+            '<camera_motion>["no-shaking","no-motion"]</camera_motion>\n'
+            '<answer>Fake</answer>'
+        )
+        wrapped = "<think>\n</think>\n" + valid
+        extra = valid + " explanation"
+        unknown = (
+            '<camera_motion>["invented-motion"]</camera_motion>\n'
+            '<answer>Fake</answer>'
+        )
+        self.assertEqual(joint_detection_format_valid(valid), 1.0)
+        self.assertEqual(joint_detection_format_valid(wrapped), 1.0)
+        self.assertEqual(joint_detection_format_valid(extra), 0.0)
+        self.assertEqual(joint_detection_format_valid(unknown), 0.0)
+        self.assertEqual(JointDetectionFormatReward()([valid, extra]), [1.0, 0.0])
+
+    def test_joint_detection_reward_uses_explicit_detection_label(self) -> None:
+        completions = [
+            '<camera_motion>["pan-left"]</camera_motion><answer>Fake</answer>',
+            '<camera_motion>["pan-left"]</camera_motion><answer>Real</answer>',
+        ]
+        self.assertEqual(
+            DetectionBinaryReward()(completions, detection_label=["Fake", "Fake"]),
+            [1.0, 0.0],
+        )
+
+    def test_camera_reward_prefers_control_truth_field(self) -> None:
+        completion = '<camera_motion>["pan-right"]</camera_motion><answer>Fake</answer>'
+        reward = CameraSetF1Reward()(
+            [completion],
+            camera_labels=[["pan-left"]],
+            camera_labels_reward=[["pan-right"]],
+        )
+        self.assertEqual(reward, [1.0])
 
 
 if __name__ == "__main__":

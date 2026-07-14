@@ -22,7 +22,8 @@
 | 2026-07-13 | 相机二元问答适配器的原检测提示词保留诊断 | 未通过；确认 Yes/No 接口接管 | 只训练 camera VQA 的 LoRA 挂回检测模型后，在无 camera 文本的原检测任务中是否明显损伤 DataA 检测和解释格式 | 原模型格式有效率 99.84%，camera 模型 642/642 均无法解析为 Real/Fake；原始回复是字面 `Yes/No`，确认 camera 单任务 LoRA 覆盖检测输出契约，后续必须联合混入 detection replay |
 | 2026-07-13 | VIF-Bench 相机适配器外部分布检测保留诊断 | 结论不足；Base 基线完成，Camera 未执行 | 同一 camera-only LoRA 是否在无 camera 文本的 VIF-Bench 原检测协议中损伤全生成视频检测能力 | 严格同提示词 Base 基线为 Balanced ACC 79.18%、Fake F1 80.47%；Camera 因半成品合并模型加载失败而无预测，且 DataA 已确认接口接管，不再为该顺序配方补跑全量 VIF |
 | 2026-07-13 | 有序抽帧二元相机辅助与检测回放联合训练三分支验证 | DataA 迁移未通过；ViF-Bench 全生成开发诊断待执行 | 在相同有序抽帧输入和检测回放下，正确二元相机监督是否比逐条翻转监督及仅检测对照学到视觉相关能力，同时保留检测接口 | DataA 最终模型和 Epoch 1/2 均未形成有利检测迁移；补一次固定最终 checkpoint 的 ViF-Bench 四模型诊断，判断失败是否跨越局部编辑/全生成分布 |
-| 2026-07-15 | 正确相机二元前置强化学习与分阶段检测恢复 | 开跑前审查完成，待执行 | 从已经通过视觉依赖门的正确相机联合 SFT 模型出发，短程 Camera-PPRL 是否能在无相机文本推理时改善 ViF-Bench；随后检测回放能否恢复检测且保留相机能力 | 固定 1024 条平衡二元相机数据、1 epoch、每题 8 次采样；候选还必须超过第一台服务器的仅检测回放 ViF 参照，直接 PPRL 与恢复后结果分开保存 |
+| 2026-07-15 | 正确相机二元前置强化学习与分阶段检测恢复 | 主实验计划撤回，保留为辅助消融 | 从已经通过视觉依赖门的正确相机联合 SFT 模型出发，短程 Camera-PPRL 是否能在无相机文本推理时改善 ViF-Bench；随后检测回放能否恢复检测且保留相机能力 | 相机-only 奖励没有直接包含 Real/Fake，也没有要求检测决策使用相机中间变量；在执行前撤回主实验地位，避免把优化器变化误当任务耦合 |
+| 2026-07-15 | 检测主导的相机中间变量联合 SFT/GRPO 三对照门 | 代码与本地真实数据 dry-run 通过，待服务器执行 | 在同一次生成中先预测相机运动再输出 Real/Fake，并让检测正确奖励主导整条 rollout，正确相机奖励是否优于等算力的仅检测奖励和打乱相机奖励 | 1024 条训练记录中 DataA/DataB 各 512、Real/Fake 各 512；打乱标签改变 99.22% 样本且保持 `source × Real/Fake` 标签边际；DataA 作局部诊断，ViF 的 Real/Fake 三对照是开发主门 |
 | 2026-07-13 | DataB 自动解释的 DeepfakeJudge-7B 可靠性门 | 代码已就绪，待服务器执行 | 专用开源深伪解释 Judge 在 DataB 上是否真正依据有序帧、bbox、时间和类别评价自动 CoT，而不是只评价语言流畅度 | 先做 200 条分层样本及视觉错配控制；通过后才进入人工校准和全量筛选 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
@@ -1679,6 +1680,73 @@ ViF-Bench 已在本项目中反复查看，只能作为开发 benchmark，不能
 一次性合并模型、rollout 和逐样本预测放 `/tmp/1res/camera_pprl/correct_camera_1024`；固定训练 JSON、审计、正式汇总和紧凑日志复制到 NAS `res/camera_pprl/correct_camera_1024`；三个 compact adapter 自动上传到 `oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/camera_pprl/correct_camera_1024/`。全部成功后才执行 `/input/training/keep.sh`，脚本不以 GPU 利用率阈值判定方法失败。
 
 立即下一步：服务器先运行无模型加载的 `STAGE=preflight`，通过后启动 `STAGE=all`。结果优先读取 `camera_pprl_final_summary.json`；若直接 PPRL 通过，先补正确/翻转 PPRL 消融；若仅恢复分支通过，先补等计算 recovery-only 控制；二者都未通过则停止扩大当前二元 Camera-PPRL。
+
+2026-07-15 任务定义更正：本节的相机-only Camera-PPRL 在正式执行前撤回主实验地位，代码保留为优化器/相机能力辅助消融。更正原因是其 rollout 只回答相机 Yes/No，奖励中没有 Real/Fake，因而即使相机奖励上升，也不能证明检测策略使用了相机信息；随后追加 detection recovery 又引入额外计算，不能修复这一归因缺口。主线改为下面的“检测主导的相机中间变量联合 SFT/GRPO 三对照门”。这是一项开跑前设计更正，不是对已有模型结果的改写。
+
+## 19. 检测主导的相机中间变量联合 SFT/GRPO 三对照门
+
+### 这个实验测什么
+
+在同一次自回归生成中，模型先从有序帧输出短相机运动标签，再输出最终 `Real/Fake`。检测正确奖励作用于整条 rollout，测试正确的逐样本相机监督能否让最终真假检测优于两个等算力对照，而不是再次用相机 VQA 指标代替检测结果。
+
+### 日期、状态与模型谱系
+
+- 日期：2026-07-15。
+- 状态：`代码与本地真实数据 dry-run 通过，待服务器执行`。
+- 原始检测模型：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
+- 已验证相机能力：原始检测模型挂载 `/tmp/1res/camera_joint_sft_gate/train/correct_camera` 后的合并模型；它只作为三个 GRPO 分支共同的能力起点。
+- 公共联合输出 warm start：上述相机能力模型在 1024 条联合记录上做 1 epoch LoRA SFT，目标严格为 `<camera_motion>[...]</camera_motion>` 后接 `<answer>Real/Fake</answer>`。三个 GRPO 分支都从完全相同的合并 warm start 出发。
+- 完整执行说明：`docs/camera_detection_joint_grpo_execution_20260715.md`。
+
+### 训练和评测数据
+
+- DataA detection：`/input/workflow_58770161/workspace/test/cameramotion_det/res/dataA_v1/autolabel/dataa_vace_grounded_cot_40step_v3_sft_clean.json`。
+- DataA camera：`/input/workflow_58770161/workspace/test/cameramotion_det/camera/camerajson/dataa_cameramotion_labels_40step_v3.jsonl`。
+- DataB detection replay：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/detection/v4vif_2766busterall_trainall.json` 经既有平衡 replay 构建器抽取的记录；起点 checkpoint 已见过 DataB，因此它只用于 replay，不是 held-out 证据。
+- DataB camera：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/datab_cameramotion_labels_final/datab_cameramotion_labels_v2.jsonl`，由 CameraBench 模型产生的伪标签；该噪声是已知限制。
+- 联合训练固定 1024 条：DataA 512 条，即 256 个完整 real/fake case pair；DataB 512 条；总计 Real/Fake 各 512 条。DataA real/fake 同源 pair 使用同一相机标签，避免相机标签直接编码真假。
+- DataA 开发门：既有 70:30 case-level split 的 324 个未训练 cases、648 条 Real/Fake 记录；继承 checkpoint 未见这批 DataA，但项目已反复用它选方案，因此称开发留出集，不称最终未见测试。
+- 通用开发门：完整 ViF-Bench。它不输入相机 label/caption，但已被项目反复查看，只用于开发复核。
+- 方法冻结后的最终通用测试：优先使用 GenBuster-200K 的独立 `benchmark` 集，须先做精确视频/帧哈希零重叠审计；MintVid 视数据可用性补充。当前实验不提前查看这些最终结果。
+
+### 单一改变因素与对照
+
+- 正确相机联合奖励：同一 rollout 奖励为 `0.65 × Real/Fake 正确 + 0.30 × 相机标签集合 F1 + 0.05 × 严格联合格式`。
+- 打乱相机联合奖励对照：输入帧、prompt、Real/Fake 标签、样本顺序、训练步数和奖励权重完全相同，只把逐样本相机真值在 `source × Real/Fake` 内做固定置换。置换保持标签边际分布，DataA real/fake pair 仍共享同一置换后标签。
+- 仅检测奖励对照：输入、联合输出格式、训练记录和步数相同，奖励改为 `0.95 × Real/Fake 正确 + 0.05 × 严格联合格式`，相机块存在但不计分。
+- 三个分支共同使用正确相机联合 SFT warm start，因此比较的是“检测奖励下继续提供正确逐样本相机 credit”是否有增量，不把共同起点差异混入对照。
+- `0.65 > 0.30 + 0.05`，所以任何检测错误且相机/格式满分的回答都低于检测正确的回答；Real/Fake 在奖励排序中具有硬主导地位。
+
+### 固定训练和推理设置
+
+- 公共 warm SFT：LoRA rank 16、alpha 32、学习率 `2e-6`、1 epoch，冻结视觉塔和多模态对齐层。
+- 三个 GRPO 分支：LoRA rank 16、alpha 32、学习率 `8e-7`、1 epoch、每题 8 个 rollout、temperature 1.0、top-p 1.0、beta 0.04、最大 3 次动态重采样；冻结视觉塔和对齐层。
+- 计算：16 张 96G GPU，vLLM colocate、tensor parallel 4。先跑 64 条 SFT smoke，再跑 64 条正确相机 GRPO smoke；smoke 平均零奖励方差组比例不得高于 80%。
+- 训练和推理都不向 user/system prompt 提供 gold camera caption 或 label。相机标签是模型自己从帧生成的中间 token，并位于 `<answer>` 之前。
+- 第一轮不训练自由文本 CoT，也不奖励解释质量；避免无法自动验证的解释奖励引入 reward hacking。检测主效应通过后，再单独恢复解释输出并继续用 Real/Fake 作为主指标。
+
+### 验收标准
+
+- DataA 诊断：四个模型覆盖率至少 99%、格式有效率至少 95%；正确相机分支相对仅检测和打乱相机两个对照，均须在 Balanced ACC 或 pair accuracy 至少提高 2 点，且另一主指标与 Fake F1 下降不超过 1 点；相对共同 warm start只要求三项下降均不超过 1 点。该结果记录局部编辑迁移，但不阻断 ViF-Bench。
+- ViF-Bench：覆盖率和格式有效率至少 99%；正确相机分支相对两个对照均须在宏平均 Balanced ACC 或 Fake F1 至少提高 1 点，另一项下降不超过 0.5 点；相对共同 warm start 不得下降超过 0.5 点。
+- 通用方法主门以 ViF-Bench 为准：只有正确相机分支在 ViF 同时超过仅检测和打乱相机对照，才允许把通用检测增量归因于逐样本相机监督。只提高相机 F1、只超过共同起点、或只在 DataA 提升都不算方法成功；DataA 未通过也不提前取消 ViF 复核。
+- 相机标签 F1、格式率和 reward variance 只用于确认训练机制正常，不替代 Real/Fake 验收。
+
+### 泄漏、分布差异和存储
+
+- DataA fake 是局部编辑，DataB 与 ViF fake 主要是全生成，两者分布差异被明确保留：DataA 测局部机制，ViF 测全生成迁移，最终 GenBuster benchmark/MintVid 测冻结方法的通用性。
+- DataB camera 是伪标签，正确分支若未超过打乱标签对照，不能归因于相机噪声以外的机制；先停止而不是增加 epoch。
+- 一次性 merged models、rollout 和逐样本预测放 `/tmp/1res/camera_detection_joint_grpo/v1`；属于可重建验证产物，不放 NAS、不上传 OSS。
+- 数据摘要、评测 JSON/CSV 和紧凑训练日志复制到 NAS `res/camera_detection_joint_grpo/v1`。
+- 公共 warm adapter 和三个 compact GRPO adapter 是昂贵且可复用的大文件，生成后上传到 `oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/camera_detection_joint_grpo/v1/`；不上传一次性合并模型。
+
+### 本地实现验证与立即下一步
+
+本地现有 DataA/DataB 镜像 dry-run 成功构建 1024 条记录：DataA/DataB 各 512、Real/Fake 各 512、DataA train/eval case 交集为 0；打乱相机标签改变 99.21875% 记录，同时保持 `source × Real/Fake` 下相机标签集合边际完全一致。该结果只验证数据和对照实现，不是模型效果。
+
+立即下一步：服务器依次运行 `STAGE=preflight`、`STAGE=build`、`STAGE=smoke_sft`、`STAGE=train_warm_sft` 和 `BRANCH=correct_camera STAGE=smoke_grpo`。工程 smoke 通过后训练三个分支，记录 DataA Real/Fake 局部编辑诊断，并无条件完成 ViF-Bench 三对照主门；只有 ViF 未满足检测验收时才停止扩大，不用相机 VQA 指标挽救结论。
+
+2026-07-15 执行优先级更正：DataA fake 是单一 VACE 局部编辑，和论文希望提升的通用全生成检测分布不同，因此 DataA 从硬停机门改为必须记录的机制诊断。完整流程即使 DataA 未通过也继续 ViF-Bench；方法是否进入 GenBuster `benchmark` 最终测试由 ViF 三对照 Real/Fake 结果决定。更正只改变阶段间停止规则，不修改训练数据、模型、奖励或两套评测本身。
 
 ## 记录维护说明
 
