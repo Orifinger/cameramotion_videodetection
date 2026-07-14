@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.camera_joint_sft_gate.evaluate_readiness import parse_binary_response
+from scripts.camera_joint_sft_gate.summarize_pair import build_summary
 from tools import build_camera_joint_sft_gate as builder
 
 
@@ -155,6 +156,37 @@ class CameraJointRuntimeTests(unittest.TestCase):
         self.assertEqual(parse_binary_response(" no \n"), "No")
         self.assertIsNone(parse_binary_response("Yes."))
         self.assertIsNone(parse_binary_response("The answer is No"))
+
+    def test_pair_gate_requires_correct_supervision_and_visual_dependency(self) -> None:
+        def metrics(balanced: float, macro_ap: float) -> dict:
+            return {
+                "coverage": 1.0,
+                "num_supported_labels": 32,
+                "overall": {
+                    "balanced_accuracy": balanced,
+                    "average_precision": macro_ap,
+                    "roc_auc": macro_ap,
+                },
+                "macro": {
+                    "balanced_accuracy": balanced,
+                    "average_precision": macro_ap,
+                    "roc_auc": macro_ap,
+                },
+                "paired_question_accuracy": balanced,
+            }
+
+        correct = {
+            "conditions": {
+                "matched_frames": metrics(0.80, 0.84),
+                "opposite_frames": metrics(0.30, 0.35),
+                "no_frames": metrics(0.50, 0.50),
+            }
+        }
+        flipped = {"conditions": {"matched_frames": metrics(0.40, 0.45)}}
+        summary = build_summary(correct, flipped, 20, 0.03, 0.05, 0.10, 0.08)
+        self.assertEqual(summary["status"], "passed")
+        self.assertTrue(summary["checks"]["correct_supervision_beats_flipped_targets"])
+        self.assertTrue(summary["checks"]["correct_model_depends_on_visual_frames"])
 
 
 if __name__ == "__main__":

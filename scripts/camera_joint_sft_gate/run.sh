@@ -238,6 +238,30 @@ infer_and_evaluate_all_camera() {
   persist_small_results
 }
 
+infer_and_evaluate_camera_branch() {
+  local name="$1"
+  local adapter="$2"
+  score_camera "${name}" "${adapter}"
+  evaluate_camera "${name}"
+  persist_small_results
+}
+
+summarize_camera_pair() {
+  require_file "${EVAL_ROOT}/correct_camera.json"
+  require_file "${EVAL_ROOT}/shuffled_camera.json"
+  "${PYTHON_BIN}" -m scripts.camera_joint_sft_gate.summarize_pair \
+    --correct-camera-eval "${EVAL_ROOT}/correct_camera.json" \
+    --flipped-camera-eval "${EVAL_ROOT}/shuffled_camera.json" \
+    --output-json "${EVAL_ROOT}/correct_vs_flipped_camera_gate_summary.json"
+  persist_small_results
+}
+
+infer_evaluate_and_summarize_camera_pair() {
+  infer_and_evaluate_camera_branch correct_camera "${CORRECT_ADAPTER}"
+  infer_and_evaluate_camera_branch shuffled_camera "${SHUFFLED_ADAPTER}"
+  summarize_camera_pair
+}
+
 sample_readiness() {
   local name="$1"
   local adapter="$2"
@@ -325,6 +349,10 @@ case "${STAGE}" in
   train_detection_only) train_branch detection_only ;;
   train_correct_camera) train_branch correct_camera ;;
   train_shuffled_camera) train_branch shuffled_camera ;;
+  eval_camera_correct) infer_and_evaluate_camera_branch correct_camera "${CORRECT_ADAPTER}" ;;
+  eval_camera_shuffled) infer_and_evaluate_camera_branch shuffled_camera "${SHUFFLED_ADAPTER}" ;;
+  summarize_camera_pair) summarize_camera_pair ;;
+  eval_camera_pair) infer_evaluate_and_summarize_camera_pair ;;
   eval_camera_all) infer_and_evaluate_all_camera ;;
   readiness_correct) sample_readiness correct_camera "${CORRECT_ADAPTER}" ;;
   readiness_shuffled) sample_readiness shuffled_camera "${SHUFFLED_ADAPTER}" ;;

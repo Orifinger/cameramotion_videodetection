@@ -153,15 +153,29 @@ echo "launcher pid: $!"
 
 另两个分支只需替换 `STAGE` 和日志名。若要评测某个 epoch checkpoint，可通过 `CORRECT_ADAPTER`、`SHUFFLED_ADAPTER` 或 `DETECTION_ONLY_ADAPTER` 环境变量覆盖默认 final adapter 路径。
 
-## 5. 相机能力、错误监督与视觉控制
+## 5. 先做正确监督与翻转监督的低成本相机门
 
-三个分支完成后执行：
+正确相机和翻转相机两个分支完成后立即执行，不等待仅检测回放分支：
 
 ```bash
-STAGE=eval_camera_all bash "$RUN"
+STAGE=eval_camera_pair bash "$RUN"
 ```
 
-该步骤直接计算每个问题的 `Yes` 对 `No` logit，不依赖生成格式，分别评测正确帧、相反答案帧和无帧。核心指标是 Overall/Macro AP、Balanced ACC、ROC-AUC 和 paired question accuracy。
+该步骤直接计算每个问题的 `Yes` 对 `No` logit，不依赖生成格式，分别评测正确帧、相反答案帧和无帧。核心指标是 Overall/Macro AP、Balanced ACC、ROC-AUC 和 paired question accuracy。逐样本分数留在 `/tmp`；评测 JSON 和汇总会自动复制到 NAS。
+
+```text
+/tmp/1res/camera_joint_sft_gate/camera_eval/correct_vs_flipped_camera_gate_summary.json
+```
+
+若中途退出，可分别恢复，不必重跑已完成模型：
+
+```bash
+STAGE=eval_camera_correct bash "$RUN"
+STAGE=eval_camera_shuffled bash "$RUN"
+STAGE=summarize_camera_pair bash "$RUN"
+```
+
+只有该门通过，才继续第 6 节采样检查和仅检测回放训练。未通过时先停止并检查 per-label 指标，不花第三次训练计算。
 
 ## 6. 短程 RL 前的采样检查
 
@@ -177,6 +191,19 @@ STAGE=summarize bash "$RUN"
 ```
 
 可验证奖励固定为：输出严格 Yes/No 得 `0.1`，答案正确再得 `0.9`。`pass@8` 只检查采样是否覆盖正确动作以及组内奖励是否有方差，不把它当作检测提升。
+
+该检查通过后再运行仅检测回放分支：
+
+```bash
+STAGE=train_detection_only bash "$RUN"
+```
+
+仅检测分支完成后，如需三个模型的完整相机汇总，再执行：
+
+```bash
+STAGE=eval_camera_all bash "$RUN"
+STAGE=summarize bash "$RUN"
+```
 
 总验收文件：
 
