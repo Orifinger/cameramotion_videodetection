@@ -242,6 +242,18 @@ STAGE=vif_shuffled_camera bash "$RUN"
 
 DataA test 是本轮开发留出集，不包装为全新论文 test。起始 checkpoint 已见过 DataB，因此 DataB 只用于 replay，不能称 held-out。VIF-Bench 推理也严格使用原检测 prompt 和 `no_camera` 条件。
 
+DataA final 门失败后，不直接重训。先检查 Epoch 1/2 是否存在相机能力与检测的早期 Pareto 窗口：
+
+```bash
+KEEP_ALIVE_AFTER_RUN=1 bash scripts/camera_joint_sft_gate/run_checkpoint_window.sh
+```
+
+默认只测 step 698、1396 的正确相机与同阶段仅检测回放。可恢复阶段为 `camera`、`dataa`、`summarize`；只有发现候选 checkpoint，才补同阶段翻转监督。
+
+```text
+/tmp/1res/camera_joint_sft_gate/checkpoint_window/checkpoint_window_summary.json
+```
+
 ## 验收规则
 
 - 正确监督的 Macro AP 比翻转监督高至少 3 点，或 Balanced ACC 高至少 5 点。

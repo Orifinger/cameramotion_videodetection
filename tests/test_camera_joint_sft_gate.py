@@ -13,6 +13,9 @@ from unittest.mock import patch
 from scripts.camera_joint_sft_gate.evaluate_readiness import parse_binary_response
 from scripts.camera_joint_sft_gate.summarize_pair import build_summary
 from scripts.camera_joint_sft_gate.summarize_dataa import build_summary as build_dataa_summary
+from scripts.camera_joint_sft_gate.summarize_checkpoint_window import (
+    build_summary as build_checkpoint_summary,
+)
 from tools import build_camera_joint_sft_gate as builder
 
 
@@ -226,6 +229,67 @@ class CameraJointRuntimeTests(unittest.TestCase):
         self.assertEqual(summary["status"], "passed")
         self.assertTrue(summary["checks"]["correct_camera_beats_detection_only"])
         self.assertTrue(summary["checks"]["correct_camera_beats_flipped_camera"])
+
+    def test_checkpoint_window_requires_camera_and_detection_gain(self) -> None:
+        camera_control = {
+            "conditions": {
+                "matched_frames": {
+                    "coverage": 1.0,
+                    "num_supported_labels": 32,
+                    "overall": {"balanced_accuracy": 0.60},
+                    "macro": {"average_precision": 0.70},
+                    "paired_question_accuracy": 0.30,
+                }
+            }
+        }
+        camera_correct = json.loads(json.dumps(camera_control))
+        camera_correct["conditions"]["matched_frames"]["overall"]["balanced_accuracy"] = 0.68
+        camera_correct["conditions"]["matched_frames"]["macro"]["average_precision"] = 0.78
+
+        def detection(balanced: float, fake_f1: float, pair: float) -> dict:
+            return {
+                "num_gt_records": 648,
+                "num_matched_records": 648,
+                "basic": {
+                    "format_valid_rate": 1.0,
+                    "accuracy": balanced,
+                    "balanced_accuracy": balanced,
+                    "fake_recall": balanced,
+                    "real_recall": balanced,
+                    "fake_f1": fake_f1,
+                },
+                "pair": {"pair_accuracy": pair, "num_pairs": 324},
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "camera_eval").mkdir()
+            for name, payload in (
+                ("step_698_detection_only.json", camera_control),
+                ("step_698_correct_camera.json", camera_correct),
+            ):
+                (root / "camera_eval" / name).write_text(json.dumps(payload), encoding="utf-8")
+            for branch, payload in (
+                ("detection_only", detection(0.70, 0.70, 0.45)),
+                ("correct_camera", detection(0.73, 0.72, 0.48)),
+            ):
+                path = root / "dataa" / "step_698" / branch / "eval" / "camera_adapter"
+                path.mkdir(parents=True)
+                (path / "dataa_detection_camera_adapter_summary.json").write_text(
+                    json.dumps(payload), encoding="utf-8"
+                )
+            summary = build_checkpoint_summary(
+                root,
+                [698],
+                min_camera_macro_ap_gain=0.03,
+                min_camera_balanced_gain=0.05,
+                min_detection_primary_gain=0.02,
+                max_detection_other_drop=0.01,
+                min_coverage=0.99,
+                min_format_valid=0.95,
+            )
+        self.assertEqual(summary["status"], "candidate_found")
+        self.assertEqual(summary["candidate_steps"], [698])
 
 
 if __name__ == "__main__":
