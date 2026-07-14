@@ -3,21 +3,48 @@ from __future__ import annotations
 import unittest
 
 from rl.camera_detection_rewards import (
+    CameraBinaryFormatReward,
+    CameraBinaryReward,
     CameraExactReward,
     CameraFormatReward,
     CameraSetF1Reward,
     DetectionBinaryReward,
     DetectionFormatReward,
+    camera_binary_correct,
+    camera_binary_format_valid,
     camera_exact_match,
     camera_format_valid,
     camera_set_f1,
     detection_binary_correct,
     detection_format_valid,
+    parse_camera_binary_answer,
     parse_camera_completion,
 )
 
 
 class CameraRewardTests(unittest.TestCase):
+    def test_binary_camera_answer_contract(self) -> None:
+        self.assertEqual(parse_camera_binary_answer("Yes"), "Yes")
+        self.assertEqual(parse_camera_binary_answer("<answer>No</answer>"), "No")
+        self.assertEqual(
+            parse_camera_binary_answer("<think>\n\n</think>\n\nYes"),
+            "Yes",
+        )
+        self.assertIsNone(parse_camera_binary_answer("Yes, because the camera pans."))
+        self.assertIsNone(parse_camera_binary_answer("<think>reasoning</think>Yes"))
+        self.assertIsNone(parse_camera_binary_answer("<answer>Yes</answer> extra"))
+
+    def test_binary_camera_reward_batch(self) -> None:
+        completions = ["<think></think>Yes", "<answer>No</answer>"]
+        solutions = ["Yes", "Yes"]
+        self.assertEqual(camera_binary_correct(completions[0], "Yes"), 1.0)
+        self.assertEqual(camera_binary_format_valid(completions[1]), 1.0)
+        self.assertEqual(
+            CameraBinaryReward()(completions, solution=solutions),
+            [1.0, 0.0],
+        )
+        self.assertEqual(CameraBinaryFormatReward()(completions), [1.0, 1.0])
+
     def test_exact_camera_match(self) -> None:
         pred = '<camera_motion>["no-shaking", "no-motion", "regular-speed"]</camera_motion>'
         truth = ["no-shaking", "no-motion", "regular-speed"]

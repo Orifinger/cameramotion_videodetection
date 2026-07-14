@@ -67,6 +67,55 @@ class ParsedCameraLabels:
     duplicate: bool
 
 
+def parse_camera_binary_answer(value: Any) -> str | None:
+    """Parse the short camera-VQA contract without rewarding extra prose.
+
+    Qwen3-VL may emit an empty thinking wrapper before the requested Yes/No
+    answer.  We accept that model-native wrapper, a single answer tag, or a
+    bare answer, while rejecting explanations that could hide reward hacking.
+    """
+
+    text = completion_text(value).strip()
+    think_match = re.match(r"^<think>\s*</think>\s*", text, re.DOTALL | re.IGNORECASE)
+    if think_match:
+        text = text[think_match.end() :].strip()
+
+    answer_matches = ANSWER_TAG_RE.findall(text)
+    if answer_matches:
+        if len(answer_matches) != 1 or ANSWER_TAG_RE.fullmatch(text) is None:
+            return None
+        text = answer_matches[0].strip()
+
+    folded = text.casefold()
+    if folded == "yes":
+        return "Yes"
+    if folded == "no":
+        return "No"
+    return None
+
+
+def normalize_camera_binary_truth(value: Any) -> str | None:
+    parsed = parse_camera_binary_answer(value)
+    if parsed:
+        return parsed
+    folded = str(value if value is not None else "").strip().casefold()
+    if folded in {"1", "true", "yes"}:
+        return "Yes"
+    if folded in {"0", "false", "no"}:
+        return "No"
+    return None
+
+
+def camera_binary_correct(prediction: Any, truth: Any) -> float:
+    predicted = parse_camera_binary_answer(prediction)
+    target = normalize_camera_binary_truth(truth)
+    return float(predicted is not None and target is not None and predicted == target)
+
+
+def camera_binary_format_valid(prediction: Any) -> float:
+    return float(parse_camera_binary_answer(prediction) is not None)
+
+
 def completion_text(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -251,6 +300,18 @@ class CameraFormatReward(ORM):
         return [camera_format_valid(pred) for pred in completions]
 
 
+class CameraBinaryReward(ORM):
+    def __call__(self, completions, **kwargs) -> list[float]:
+        truth_value = kwargs.get("solution", kwargs.get("answer"))
+        truths = _scalar_truth_per_completion(truth_value, len(completions))
+        return [camera_binary_correct(pred, truth) for pred, truth in zip(completions, truths)]
+
+
+class CameraBinaryFormatReward(ORM):
+    def __call__(self, completions, **kwargs) -> list[float]:
+        return [camera_binary_format_valid(pred) for pred in completions]
+
+
 class DetectionBinaryReward(ORM):
     def __call__(self, completions, **kwargs) -> list[float]:
         truths = _scalar_truth_per_completion(kwargs.get("label"), len(completions))
@@ -265,5 +326,7 @@ class DetectionFormatReward(ORM):
 orms["camera_set_f1"] = CameraSetF1Reward
 orms["camera_exact"] = CameraExactReward
 orms["camera_format"] = CameraFormatReward
+orms["camera_binary_acc"] = CameraBinaryReward
+orms["camera_binary_format"] = CameraBinaryFormatReward
 orms["detection_binary_acc"] = DetectionBinaryReward
 orms["detection_format"] = DetectionFormatReward
