@@ -9,6 +9,22 @@ import sys
 from pathlib import Path
 
 
+QWEN3_VL_IMAGE_PROCESSOR_CLASSES = {
+    "Qwen2VLImageProcessor",
+    "Qwen2VLImageProcessorFast",
+    "Qwen3VLImageProcessor",
+    "Qwen3VLImageProcessorFast",
+}
+
+
+def is_qwen3_vl_processor_pair(processor_class: str, image_processor_class: str) -> bool:
+    """Accept the Qwen2-VL image processor reused by Transformers Qwen3-VL."""
+    return (
+        processor_class == "Qwen3VLProcessor"
+        and image_processor_class in QWEN3_VL_IMAGE_PROCESSOR_CLASSES
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--verl-root", required=True)
@@ -64,10 +80,13 @@ def main() -> None:
             break
 
     samples = []
+    processor_class = processor.__class__.__name__
+    image_processor_class = processor.image_processor.__class__.__name__
     checks = {
-        "processor_is_qwen3_vl": "Qwen3VLProcessor" in processor.__class__.__name__,
-        "image_processor_is_qwen3_vl": "Qwen3VLImageProcessor"
-        in processor.image_processor.__class__.__name__,
+        "processor_is_qwen3_vl": processor_class == "Qwen3VLProcessor",
+        "image_processor_is_qwen3_vl_compatible": is_qwen3_vl_processor_pair(
+            processor_class, image_processor_class
+        ),
         "both_classes_loaded": set(selected) == {"Fake", "Real"},
         "all_samples_have_16_images": True,
         "all_position_ids_are_4d": True,
@@ -99,8 +118,8 @@ def main() -> None:
         "model_path": args.model_path,
         "train_parquet": args.train_parquet,
         "dataset_records": len(dataset),
-        "processor_class": processor.__class__.__name__,
-        "image_processor_class": processor.image_processor.__class__.__name__,
+        "processor_class": processor_class,
+        "image_processor_class": image_processor_class,
         "checks": checks,
         "samples": samples,
     }

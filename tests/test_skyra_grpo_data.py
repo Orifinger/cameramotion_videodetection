@@ -10,6 +10,7 @@ from skyra_grpo_diagnostics.build_datab_verl import (
     select_user_frame_lines,
     uniform_indices,
 )
+from skyra_grpo_diagnostics.preflight_verl_dataset import is_qwen3_vl_processor_pair
 
 
 class SkyraDataConversionTests(unittest.TestCase):
@@ -27,6 +28,23 @@ class SkyraDataConversionTests(unittest.TestCase):
         self.assertEqual(result.count("<image>"), 16)
         dropped = next(index for index in range(17) if index not in selected)
         self.assertNotIn(f"[T={dropped}.00s] <image>", result)
+
+    def test_qwen3_vl_accepts_transformers_qwen2_image_processor(self) -> None:
+        self.assertTrue(
+            is_qwen3_vl_processor_pair(
+                "Qwen3VLProcessor", "Qwen2VLImageProcessorFast"
+            )
+        )
+        self.assertTrue(
+            is_qwen3_vl_processor_pair(
+                "Qwen3VLProcessor", "Qwen3VLImageProcessorFast"
+            )
+        )
+        self.assertFalse(
+            is_qwen3_vl_processor_pair(
+                "Qwen2VLProcessor", "Qwen2VLImageProcessorFast"
+            )
+        )
 
 
 if __name__ == "__main__":
