@@ -159,8 +159,11 @@ class CameraJointRuntimeTests(unittest.TestCase):
     def test_binary_response_parser_requires_canonical_answer(self) -> None:
         self.assertEqual(parse_binary_response("Yes"), "Yes")
         self.assertEqual(parse_binary_response(" no \n"), "No")
+        self.assertEqual(parse_binary_response("<think>\n\n</think>\n\nYes"), "Yes")
+        self.assertEqual(parse_binary_response("<think> </think> no"), "No")
         self.assertIsNone(parse_binary_response("Yes."))
         self.assertIsNone(parse_binary_response("The answer is No"))
+        self.assertIsNone(parse_binary_response("<think>reason</think>Yes"))
 
     def test_pair_gate_requires_correct_supervision_and_visual_dependency(self) -> None:
         def metrics(balanced: float, macro_ap: float) -> dict:

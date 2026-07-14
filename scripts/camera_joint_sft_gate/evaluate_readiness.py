@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -28,6 +29,13 @@ def parse_binary_response(response: str) -> str | None:
         return "Yes"
     if stripped.casefold() == "no":
         return "No"
+    match = re.fullmatch(
+        r"<think>\s*</think>\s*(Yes|No)",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).capitalize()
     return None
 
 
