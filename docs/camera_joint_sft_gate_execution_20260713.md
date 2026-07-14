@@ -220,12 +220,16 @@ STAGE=summarize bash "$RUN"
 
 ## 7. 无相机文本的检测保留
 
-先做较便宜的 DataA 三分支比较：
+先做 DataA 四模型比较。推荐 runner 只推理一次 base，再依次评测三个 adapter：
 
 ```bash
-STAGE=dataa_detection_only bash "$RUN"
-STAGE=dataa_correct_camera bash "$RUN"
-STAGE=dataa_shuffled_camera bash "$RUN"
+KEEP_ALIVE_AFTER_RUN=1 bash scripts/camera_joint_sft_gate/run_dataa_compare.sh
+```
+
+可恢复阶段为 `detection_only`、`correct_camera`、`flipped_camera` 和 `summarize`。正式汇总位于：
+
+```text
+/tmp/1res/camera_joint_sft_gate/dataa_four_model_compare/dataa_four_model_detection_gate_summary.json
 ```
 
 只有正确监督分支既学到视觉相机能力、又没有出现 Yes/No 接口接管时，再运行 VIF-Bench：
@@ -244,6 +248,7 @@ DataA test 是本轮开发留出集，不包装为全新论文 test。起始 che
 - 正确监督分支在相反答案帧上 Balanced ACC 至少下降 10 点，或无帧至少下降 8 点。
 - train/dev 至少 20 个相机 primitive 有正负支持，开发集覆盖率至少 99%。
 - `pass@8` 至少 20% 的样本具有非恒定组内奖励；不满足时不启动 GRPO。
+- DataA 检测要求四个模型覆盖率至少 99%、格式有效率至少 95%；正确监督相对仅检测回放和翻转监督都须在 Balanced ACC 或 pair accuracy 上提高至少 2 点，同时另一主指标和 Fake F1 不得下降超过 1 点。
 - DataA/VIF 检测完整报告格式有效率、Balanced ACC、Fake F1 和 pair accuracy。严重接口接管，或正确监督明显差于两个控制，都不进入 RL。
 
 这组门通过只说明联合训练配方值得进入短程 RL，不说明相机已经提高 AIGC 检测。最终方法结论仍必须由无相机文本的留出 DataA 和外部 VIF-Bench 检测结果建立。

@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from scripts.camera_joint_sft_gate.evaluate_readiness import parse_binary_response
 from scripts.camera_joint_sft_gate.summarize_pair import build_summary
+from scripts.camera_joint_sft_gate.summarize_dataa import build_summary as build_dataa_summary
 from tools import build_camera_joint_sft_gate as builder
 
 
@@ -195,6 +196,36 @@ class CameraJointRuntimeTests(unittest.TestCase):
         self.assertEqual(summary["status"], "passed")
         self.assertTrue(summary["checks"]["correct_supervision_beats_flipped_targets"])
         self.assertTrue(summary["checks"]["correct_model_depends_on_visual_frames"])
+
+    def test_dataa_gate_requires_correct_branch_to_beat_both_controls(self) -> None:
+        def payload(balanced: float, fake_f1: float, pair: float) -> dict:
+            return {
+                "num_gt_records": 648,
+                "num_matched_records": 648,
+                "basic": {
+                    "format_valid_rate": 1.0,
+                    "accuracy": balanced,
+                    "balanced_accuracy": balanced,
+                    "fake_recall": balanced,
+                    "real_recall": balanced,
+                    "fake_f1": fake_f1,
+                },
+                "pair": {"pair_accuracy": pair, "num_pairs": 324},
+            }
+
+        summary = build_dataa_summary(
+            payload(0.60, 0.60, 0.30),
+            payload(0.70, 0.70, 0.45),
+            payload(0.74, 0.73, 0.49),
+            payload(0.68, 0.68, 0.42),
+            min_coverage=0.99,
+            min_format_valid=0.95,
+            min_primary_gain=0.02,
+            max_other_drop=0.01,
+        )
+        self.assertEqual(summary["status"], "passed")
+        self.assertTrue(summary["checks"]["correct_camera_beats_detection_only"])
+        self.assertTrue(summary["checks"]["correct_camera_beats_flipped_camera"])
 
 
 if __name__ == "__main__":
