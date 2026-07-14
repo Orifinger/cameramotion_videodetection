@@ -298,6 +298,7 @@ preflight() {
   require_file "tools/build_camera_joint_sft_gate.py"
   require_file "tools/audit_camera_pprl_smoke.py"
   require_file "rl/camera_detection_rewards.py"
+  require_file "scripts/__init__.py"
   require_file "scripts/caspr_gate1/merge_adapter.py"
   require_file "scripts/caspr_gate1/runtime.py"
   require_file "scripts/camera_joint_sft_gate/summarize_dataa.py"
@@ -332,9 +333,27 @@ preflight() {
   training_type_option "${PREFLIGHT_ROOT}/swift_rlhf_help.txt" >/dev/null
   "${PYTHON_BIN}" - <<PY
 import json
+import importlib.util
 from pathlib import Path
 import torch, transformers, swift, vllm
 from rl.camera_detection_rewards import orms
+
+repo_root = Path("${REPO_ROOT}").resolve()
+project_modules = (
+    "scripts.caspr_gate1.merge_adapter",
+    "scripts.caspr_gate1.runtime",
+    "scripts.camera_detection_joint_grpo.summarize",
+    "scripts.camera_detection_retention.vifbench_retention",
+    "scripts.camera_joint_sft_gate.summarize_dataa",
+    "scripts.camera_joint_sft_gate.summarize_vif_four_model",
+)
+module_origins = {}
+for name in project_modules:
+    spec = importlib.util.find_spec(name)
+    assert spec is not None and spec.origin, f"Cannot resolve project module: {name}"
+    origin = Path(spec.origin).resolve()
+    assert repo_root in origin.parents, f"{name} resolved outside project: {origin}"
+    module_origins[name] = str(origin)
 
 assert torch.cuda.device_count() == ${NUM_GPUS}, (torch.cuda.device_count(), ${NUM_GPUS})
 assert ${NUM_GPUS} % ${VLLM_TP} == 0
@@ -348,6 +367,7 @@ payload = {
     "swift_file": swift.__file__,
     "vllm": getattr(vllm, "__version__", "unknown"),
     "gpus": torch.cuda.device_count(),
+    "project_module_origins": module_origins,
     "reward_weights": {
         "correct_or_shuffled": [0.65, 0.30, 0.05],
         "detection_only": [0.95, 0.05],
@@ -359,7 +379,7 @@ Path("${PREFLIGHT_ROOT}/environment_audit.json").write_text(
 )
 print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
-  echo "Preflight passed. It checked files, CLI options, reward registration, and 16 GPUs only."
+  echo "Preflight passed. It checked files, project module resolution, CLI options, reward registration, and 16 GPUs only."
 }
 
 build_joint_source_if_needed() {
