@@ -6,7 +6,7 @@
 
 | 日期 | 中文实验名称 | 状态 | 这个实验测什么 | 当前结论 |
 |---|---|---|---|---|
-| 2026-07-08 | 完整 DataB 检测模型的 VIF-Bench 基线 | 已完成 | 仅使用自动标注检测数据训练后，在通用全生成视频测试集上的检测能力 | 旧记录为 ACC 83.96、F1 84.72；需用当前完全一致的提示词复测一次 |
+| 2026-07-08 | 完整 DataB 检测模型的 VIF-Bench 基线 | 已完成；训练来源审计已补充 | 仅使用自动标注检测数据训练后，在通用全生成视频测试集上的检测能力 | DataB 为 4000 条 ViF-CoT-4K 加 2766 条 GenBuster，后者含 1242 条官方 test 路径；ViF-Bench 只作开发 benchmark，GenBuster 未清洗测试不可作为外部结论 |
 | 2026-07-08 | DataA 与 DataB 混合检测续训 | 未通过 | 加入局部编辑 DataA 检测数据后，能否同时提高 DataA 并保持 VIF-Bench | DataA 没有形成可靠提升，VIF-Bench 明显下降 |
 | 2026-07-08 | DataA 与 DataB 相机条件化混合续训 | 未通过 | 在检测训练中加入相机条件后，是否优于普通混合续训 | 只有局部波动，没有稳定优于普通续训，VIF-Bench 仍明显下降 |
 | 2026-07-09 | 相机补偿局部残差探针 | 已停止 | 传统全局运动补偿后的局部残差能否区分 DataA 真/假视频 | 整体接近随机，不继续作为主方法 |
@@ -49,6 +49,20 @@
 ### 结论与限制
 
 该模型是后续实验的 detection SFT 初始模型。旧 VIF-Bench 推理代码中的 user prompt 后缀与当前严格匹配训练数据的后缀有一个很小的措辞区别，因此正式比较继续训练造成的能力变化前，需要用当前提示词复测该 checkpoint。
+
+### 2026-07-14 DataB 训练来源路径审计
+
+这次实际检查的是本地正式训练文件 `ourdata/dataB/v4vif_2766busterall_trainall.json` 中每条记录第一帧的来源路径，目的是判断现有 benchmark 是否与起始 detection checkpoint 的训练视频重叠。该审计只检查数据谱系，不评价模型性能。
+
+| DataB 来源 | 记录数 |
+|---|---:|
+| ViF-CoT-4K | 4000 |
+| GenBuster 合计 | 2766 |
+| GenBuster `train` 路径 | 1524 |
+| GenBuster `test` 路径 | 1242 |
+| 总计 | 6766 |
+
+结论标记：`通过（数据谱系审计）`。未经排除精确视频 ID 的 GenBuster test 不能作为当前 checkpoint 的外部测试，因为至少 1242 条训练记录直接来自其 `test` 路径。ViF-CoT-4K 与 ViF-Bench 是 Skyra 定义的训练集/benchmark 组合，仍需对本地训练帧目录与本地 ViF-Bench test index 做精确 case ID 或视频哈希重叠审计；即使没有重叠，ViF-Bench 已在本项目中反复用于方法选择，因此后续定位为开发 benchmark，而不是未揭盲的最终测试集。
 
 ## 2. DataA 与 DataB 混合检测续训
 
