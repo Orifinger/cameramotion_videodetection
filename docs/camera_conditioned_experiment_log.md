@@ -1746,7 +1746,7 @@ ViF-Bench 已在本项目中反复查看，只能作为开发 benchmark，不能
 
 立即下一步：服务器依次运行 `STAGE=preflight`、`STAGE=build`、`STAGE=smoke_sft`、`STAGE=train_warm_sft` 和 `BRANCH=correct_camera STAGE=smoke_grpo`。工程 smoke 通过后训练三个分支，记录 DataA Real/Fake 局部编辑诊断，并无条件完成 ViF-Bench 三对照主门；只有 ViF 未满足检测验收时才停止扩大，不用相机 VQA 指标挽救结论。
 
-2026-07-15 执行优先级更正：DataA fake 是单一 VACE 局部编辑，和论文希望提升的通用全生成检测分布不同，因此 DataA 从硬停机门改为必须记录的机制诊断。完整流程即使 DataA 未通过也继续 ViF-Bench；方法是否进入 GenBuster `benchmark` 最终测试由 ViF 三对照 Real/Fake 结果决定。更正只改变阶段间停止规则，不修改训练数据、模型、奖励或两套评测本身。
+2026-07-15 执行优先级更正：DataA fake 是单一 VACE 局部编辑，和论文希望提升的通用全生成检测分布不同，因此 DataA 从硬停机门改为必须记录的机制诊断。完整流程即使 DataA 未通过也继续 ViF-Bench；方法是否进入 GenBuster `benchmark` 最终测试由 ViF 三对照 Real/Fake 结果决定。DataA 的 `failed` 和 ViF 的 `no_camera_gain` 都是正常实验结论，不作为 shell 工程错误；流程仍归档并执行 keep-alive，只有环境、数据、训练、推理或 smoke 报错才非零退出。更正只改变阶段间停止规则，不修改训练数据、模型、奖励或两套评测本身。
 
 ## 记录维护说明
 

@@ -4,7 +4,6 @@ import unittest
 from collections import Counter, defaultdict
 
 from scripts.camera_detection_joint_grpo.summarize import (
-    blocks_pipeline,
     build_dataa_summary,
     build_vif_summary,
 )
@@ -157,12 +156,6 @@ class JointDataTests(unittest.TestCase):
 
 
 class JointSummaryTests(unittest.TestCase):
-    def test_only_vif_failure_blocks_the_pipeline(self) -> None:
-        self.assertFalse(blocks_pipeline("dataa", "failed"))
-        self.assertFalse(blocks_pipeline("dataa", "passed"))
-        self.assertFalse(blocks_pipeline("vif", "camera_candidate"))
-        self.assertTrue(blocks_pipeline("vif", "no_camera_gain"))
-
     def test_dataa_gate_uses_detection_endpoints(self) -> None:
         summary = build_dataa_summary(
             dataa_eval(0.60, 0.60, 0.25),

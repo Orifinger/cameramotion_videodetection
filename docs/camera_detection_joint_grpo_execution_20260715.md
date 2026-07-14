@@ -132,6 +132,8 @@ cat /tmp/1res/camera_detection_joint_grpo/v1/vif_eval/camera_detection_joint_grp
 
 ViF 汇总只有 `status: camera_candidate` 才冻结训练配方，转到未用于选模的 GenBuster-200K `benchmark` 集；ViF-Bench 已用于开发，不作为最终未见测试。若 ViF 不通过，即使 DataA 通过也不把方法判为成功。
 
+`camera_candidate` 和 `no_camera_gain` 都属于正常完成的实验结果，脚本都会在归档后执行 `/input/training/keep.sh`。只有环境、数据、训练、推理或 smoke 工程检查报错才以非零状态退出。
+
 ## 分支单独执行
 
 三条训练命令分别是：

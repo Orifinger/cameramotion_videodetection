@@ -21,12 +21,6 @@ def read_json(path: str | Path) -> dict[str, Any]:
     return dict(payload)
 
 
-def blocks_pipeline(command: str, status: str) -> bool:
-    """Only the full-generation development benchmark is a hard method gate."""
-
-    return command == "vif" and status != "camera_candidate"
-
-
 def deltas(candidate: Mapping[str, Any], control: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, float]:
     return {
         key: float(candidate[key]) - float(control[key])
@@ -276,10 +270,6 @@ def main() -> None:
         )
     write_json(args.output_json, summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    # DataA is a local-edit diagnostic and must not block the full-generation
-    # benchmark. ViF-Bench is the development decision gate for this method.
-    if blocks_pipeline(args.command, str(summary["status"])):
-        raise SystemExit(1)
 
 
 if __name__ == "__main__":
