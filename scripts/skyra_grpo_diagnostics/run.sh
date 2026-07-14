@@ -11,6 +11,7 @@ STAGE=${STAGE:-prepare}
 RUN_MODE=${RUN_MODE:-smoke}
 REWARD_VARIANT=${REWARD_VARIANT:-paper_asymmetric_inspection}
 SEED=${SEED:-20260714}
+SAVE_FREQ=${SAVE_FREQ:--1}
 
 if [[ "${RUN_MODE}" == "smoke" ]]; then
   TOTAL_STEPS=${TOTAL_STEPS:-1}
@@ -90,6 +91,7 @@ train() {
     "train_batch_size=${TRAIN_BATCH_SIZE}" \
     "group_size=${GROUP_SIZE}" \
     "trajectory_batch_size=${TRAJECTORY_BATCH_SIZE}" \
+    "save_freq=${SAVE_FREQ}" \
     "seed=${SEED}" > "${PERSIST_ROOT}/run_manifest.txt"
 
   set +e
@@ -161,7 +163,7 @@ train() {
     trainer.balance_batch=True \
     trainer.val_before_train=False \
     trainer.test_freq=-1 \
-    trainer.save_freq=-1 \
+    trainer.save_freq="${SAVE_FREQ}" \
     trainer.total_epochs=1 \
     trainer.total_training_steps="${TOTAL_STEPS}" \
     trainer.rollout_data_dir="${RUN_ROOT}/rollouts" \

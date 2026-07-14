@@ -24,4 +24,6 @@
 
 除了 verl 自带的 reward、KL、entropy、policy loss、grad norm 和耗时外，补丁会写入 TensorBoard：分类正确率、预测 Fake 比例、FP/FN、格式有效率、证据数量、严格有效证据数量、重复/无效框率、错误回答仍获正奖励比例，以及 GRPO 组内零奖励方差率。
 
-所有逐样本 rollout 暂存在 `/tmp/1res/skyra_grpo_diagnostics/<run>/rollouts`。压缩后的曲线 CSV、摘要、TensorBoard 和日志写入 NAS 的 `res/skyra_grpo_diagnostics/<run>`。当前诊断不保存 checkpoint，不需要上传 OSS。
+所有逐样本 rollout 暂存在 `/tmp/1res/skyra_grpo_diagnostics/<run>/rollouts`。压缩后的曲线 CSV、摘要、TensorBoard 和日志写入 NAS 的 `res/skyra_grpo_diagnostics/<run>`。
+
+`run.sh` 默认仍使用 `SAVE_FREQ=-1`，只做曲线诊断；需要固定评测时显式设置正整数保存间隔。`run_evalable_100step.sh` 固定复跑论文式奖励 100 步，并且只改变 checkpoint 保存：step 50 和 step 100 写入 `/tmp`，训练结束后将整个运行目录上传 OSS，再启动 `/input/training/keep.sh`。该 wrapper 不改变数据、seed、奖励、batch、group size、学习率、KL 或回复长度。
