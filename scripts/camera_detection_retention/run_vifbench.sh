@@ -33,8 +33,8 @@ fi
 BASE_MODEL_NAME="${BASE_MODEL_NAME:-Qwen3-VL-8B-detection-base-vifbench-retention}"
 CAMERA_MODEL_NAME="${CAMERA_MODEL_NAME:-Qwen3-VL-8B-camera-adapter-vifbench-retention}"
 INFERENCE_ROOT="${RUN_ROOT}/inference"
-BASE_PRED_DIR="${INFERENCE_ROOT}/base/splitresults"
-CAMERA_PRED_DIR="${INFERENCE_ROOT}/camera_adapter/splitresults"
+BASE_PRED_DIR="${BASE_PRED_DIR:-${INFERENCE_ROOT}/base/splitresults}"
+CAMERA_PRED_DIR="${CAMERA_PRED_DIR:-${INFERENCE_ROOT}/camera_adapter/splitresults}"
 COMBINED_DIR="${RUN_ROOT}/combined_predictions"
 BASE_MERGED_JSON="${COMBINED_DIR}/base.json"
 CAMERA_MERGED_JSON="${COMBINED_DIR}/camera_adapter.json"
@@ -48,6 +48,7 @@ LOG_PATH="${RUN_ROOT}/pipeline.log"
 
 REBUILD_MERGED="${REBUILD_MERGED:-0}"
 PARALLEL_MODELS="${PARALLEL_MODELS:-1}"
+SKIP_BASE_INFERENCE="${SKIP_BASE_INFERENCE:-0}"
 KEEP_ALIVE_AFTER_RUN="${KEEP_ALIVE_AFTER_RUN:-1}"
 KEEP_ALIVE_SCRIPT="${KEEP_ALIVE_SCRIPT:-/input/training/keep.sh}"
 
@@ -175,6 +176,12 @@ infer_one() {
 
 run_inference_pair() {
   require_dir "${MERGED_MODEL_DIR}"
+  if [[ "${SKIP_BASE_INFERENCE}" == "1" ]]; then
+    require_dir "${BASE_PRED_DIR}"
+    echo "Reusing base predictions: ${BASE_PRED_DIR}"
+    infer_one "${MERGED_MODEL_DIR}" "${CAMERA_MODEL_NAME}" "${CAMERA_PRED_DIR}" "${INFERENCE_ROOT}/camera_adapter/inference.log"
+    return
+  fi
   if [[ "${PARALLEL_MODELS}" == "1" ]]; then
     echo "Launching base and camera-adapter inference concurrently: two model processes per GPU."
     infer_one "${MODEL_PATH}" "${BASE_MODEL_NAME}" "${BASE_PRED_DIR}" "${INFERENCE_ROOT}/base/inference.log" &
@@ -256,7 +263,13 @@ echo "base_model=${MODEL_PATH}"
 echo "camera_adapter=${ADAPTER_PATH}"
 echo "run_root=${RUN_ROOT}"
 echo "prompt_mode=no_camera"
-echo "parallel_models=${PARALLEL_MODELS}; processes_per_gpu=$((PARALLEL_MODELS + 1))"
+if [[ "${SKIP_BASE_INFERENCE}" == "1" ]]; then
+  ACTIVE_PROCESSES_PER_GPU=1
+else
+  ACTIVE_PROCESSES_PER_GPU=$((PARALLEL_MODELS + 1))
+fi
+echo "parallel_models=${PARALLEL_MODELS}; processes_per_gpu=${ACTIVE_PROCESSES_PER_GPU}"
+echo "skip_base_inference=${SKIP_BASE_INFERENCE}; base_prediction_dir=${BASE_PRED_DIR}"
 
 case "${STAGE}" in
   preflight)

@@ -254,6 +254,29 @@ KEEP_ALIVE_AFTER_RUN=1 bash scripts/camera_joint_sft_gate/run_checkpoint_window.
 /tmp/1res/camera_joint_sft_gate/checkpoint_window/checkpoint_window_summary.json
 ```
 
+早期窗口同样失败后，允许一次 ViF-Bench 全生成视频开发诊断，回答局部编辑负迁移是否跨分布复现。原始 detection checkpoint 只推理一次；随后比较最终仅检测回放、正确相机和翻转相机三个等步数分支。所有模型使用相同原检测 prompt，推理不提供 camera 文本。
+
+```bash
+STAGE=preflight bash scripts/camera_joint_sft_gate/run_vif_four_model_compare.sh
+
+KEEP_ALIVE_AFTER_RUN=1 \
+bash scripts/camera_joint_sft_gate/run_vif_four_model_compare.sh
+```
+
+完整临时结果位于：
+
+```text
+/tmp/1res/camera_joint_sft_gate/vif_four_model_compare
+```
+
+统一汇总位于：
+
+```text
+/tmp/1res/camera_joint_sft_gate/vif_four_model_compare/vif_four_model_detection_gate_summary.json
+```
+
+脚本先并行运行原模型与仅检测回放模型，再顺序合并两个相机 adapter，并行运行正确/翻转相机模型。可恢复阶段为 `detection_pair`、`camera_pair` 和 `summarize`。合并模型与原始预测均是可重建诊断产物，只放 `/tmp`；小型评测 JSON、CSV 和日志自动写入 NAS 的 `res/camera_joint_sft_gate/vif_four_model_compare`。
+
 ## 验收规则
 
 - 正确监督的 Macro AP 比翻转监督高至少 3 点，或 Balanced ACC 高至少 5 点。

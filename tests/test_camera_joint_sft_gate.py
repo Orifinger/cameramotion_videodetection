@@ -16,6 +16,9 @@ from scripts.camera_joint_sft_gate.summarize_dataa import build_summary as build
 from scripts.camera_joint_sft_gate.summarize_checkpoint_window import (
     build_summary as build_checkpoint_summary,
 )
+from scripts.camera_joint_sft_gate.summarize_vif_four_model import (
+    build_summary as build_vif_summary,
+)
 from tools import build_camera_joint_sft_gate as builder
 
 
@@ -290,6 +293,59 @@ class CameraJointRuntimeTests(unittest.TestCase):
             )
         self.assertEqual(summary["status"], "candidate_found")
         self.assertEqual(summary["candidate_steps"], [698])
+
+    def test_vif_gate_requires_correct_branch_to_beat_both_controls(self) -> None:
+        def payload(balanced: float, real_recall: float, fake_recall: float, f1: float) -> dict:
+            per_model = {}
+            for source in ("generator-a", "generator-b"):
+                pairs = 100
+                real_correct = round(real_recall * pairs)
+                fake_correct = round(fake_recall * pairs)
+                false_positive = pairs - real_correct
+                precision = fake_correct / (fake_correct + false_positive)
+                per_model[source] = {
+                    "num_pairs": pairs,
+                    "balanced_accuracy": balanced,
+                    "real_recall": real_recall,
+                    "fake_recall": fake_recall,
+                    "fake_precision": precision,
+                    "fake_f1": f1,
+                    "confusion": {
+                        "real_as_real": real_correct,
+                        "real_as_fake": false_positive,
+                        "fake_as_fake": fake_correct,
+                        "fake_as_real": pairs - fake_correct,
+                    },
+                }
+            return {
+                "num_expected_predictions": 400,
+                "num_matched_predictions": 400,
+                "coverage": 1.0,
+                "format_valid_rate": 1.0,
+                "average_across_fake_models": {
+                    "num_models": 2,
+                    "balanced_accuracy": balanced,
+                    "fake_recall": fake_recall,
+                    "fake_f1": f1,
+                },
+                "per_fake_model": per_model,
+            }
+
+        summary = build_vif_summary(
+            payload(0.68, 0.66, 0.70, 0.69),
+            payload(0.70, 0.69, 0.71, 0.70),
+            payload(0.74, 0.73, 0.75, 0.74),
+            payload(0.69, 0.68, 0.70, 0.69),
+            min_coverage=0.99,
+            min_format_valid=0.99,
+            min_primary_gain=0.01,
+            max_other_primary_drop=0.005,
+            min_source_win_rate=0.60,
+            min_class_recall=0.45,
+        )
+        self.assertEqual(summary["status"], "camera_candidate")
+        self.assertTrue(summary["checks"]["correct_camera_beats_detection_only"])
+        self.assertTrue(summary["checks"]["correct_camera_beats_flipped_camera"])
 
 
 if __name__ == "__main__":
