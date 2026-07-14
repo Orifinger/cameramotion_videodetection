@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from scripts.camera_pprl.summarize import build_summary
+from tools.audit_camera_pprl_smoke import build_audit
 from tools.build_camera_pprl_binary import convert_record, select_balanced_pairs
 
 
@@ -40,10 +41,16 @@ def camera_eval(balanced: float, macro_ap: float, opposite: float = 0.25) -> dic
     }
 
 
-def vif_eval(balanced: float, fake_f1: float) -> dict:
+def vif_eval(
+    balanced: float,
+    fake_f1: float,
+    *,
+    expected_predictions: int = 200,
+    generator: str = "generator",
+) -> dict:
     return {
-        "num_expected_predictions": 200,
-        "num_matched_predictions": 200,
+        "num_expected_predictions": expected_predictions,
+        "num_matched_predictions": expected_predictions,
         "coverage": 1.0,
         "format_valid_rate": 1.0,
         "average_across_fake_models": {
@@ -53,7 +60,7 @@ def vif_eval(balanced: float, fake_f1: float) -> dict:
             "fake_f1": fake_f1,
         },
         "per_fake_model": {
-            "generator": {
+            generator: {
                 "num_pairs": 100,
                 "real_recall": 0.6,
                 "fake_recall": 0.6,
@@ -93,6 +100,28 @@ class CameraPprlDataTests(unittest.TestCase):
         self.assertTrue(all(message["role"] != "assistant" for message in converted["messages"]))
         self.assertEqual(len(converted["images"]), 2)
 
+    def test_smoke_audit_requires_nonzero_group_advantages(self) -> None:
+        passed = build_audit(
+            [
+                {"frac_reward_zero_std": 0.5, "reward_std": 0.2},
+                {"train/frac_reward_zero_std": 0.75, "reward_std": 0.1},
+            ],
+            ["logging.jsonl"],
+            max_zero_std_rate=0.8,
+            min_log_points=2,
+        )
+        failed = build_audit(
+            [
+                {"frac_reward_zero_std": 1.0},
+                {"frac_reward_zero_std": 0.9},
+            ],
+            ["logging.jsonl"],
+            max_zero_std_rate=0.8,
+            min_log_points=2,
+        )
+        self.assertEqual(passed["status"], "passed")
+        self.assertEqual(failed["status"], "failed")
+
 
 class CameraPprlSummaryTests(unittest.TestCase):
     def test_direct_pprl_candidate_is_separate_from_recovery(self) -> None:
@@ -104,6 +133,7 @@ class CameraPprlSummaryTests(unittest.TestCase):
             vif_eval(0.62, 0.62),
             vif_eval(0.62, 0.62),
             vif_eval(0.63, 0.63),
+            vif_eval(0.60, 0.60),
         )
         self.assertEqual(summary["status"], "direct_pprl_candidate")
         self.assertAlmostEqual(
@@ -120,8 +150,66 @@ class CameraPprlSummaryTests(unittest.TestCase):
             vif_eval(0.60, 0.60),
             vif_eval(0.60, 0.60),
             vif_eval(0.60, 0.60),
+            vif_eval(0.60, 0.60),
         )
         self.assertEqual(summary["status"], "no_detection_transfer")
+
+    def test_positive_core_gate_waits_for_detection_only_reference(self) -> None:
+        summary = build_summary(
+            camera_eval(0.74, 0.86),
+            camera_eval(0.76, 0.87),
+            camera_eval(0.75, 0.85),
+            vif_eval(0.60, 0.60),
+            vif_eval(0.62, 0.62),
+            vif_eval(0.62, 0.62),
+            vif_eval(0.63, 0.63),
+        )
+        self.assertEqual(summary["status"], "pending_detection_only_reference")
+
+    def test_pprl_rebound_below_detection_control_is_not_a_candidate(self) -> None:
+        summary = build_summary(
+            camera_eval(0.74, 0.86),
+            camera_eval(0.76, 0.87),
+            camera_eval(0.75, 0.85),
+            vif_eval(0.60, 0.60),
+            vif_eval(0.62, 0.62),
+            vif_eval(0.62, 0.62),
+            vif_eval(0.63, 0.63),
+            vif_eval(0.65, 0.65),
+        )
+        self.assertEqual(summary["status"], "no_detection_transfer")
+
+    def test_incompatible_detection_reference_is_not_a_candidate(self) -> None:
+        summary = build_summary(
+            camera_eval(0.74, 0.86),
+            camera_eval(0.76, 0.87),
+            camera_eval(0.75, 0.85),
+            vif_eval(0.60, 0.60),
+            vif_eval(0.62, 0.62),
+            vif_eval(0.62, 0.62),
+            vif_eval(0.63, 0.63),
+            vif_eval(0.60, 0.60, expected_predictions=198, generator="other"),
+        )
+        self.assertEqual(summary["status"], "no_detection_transfer")
+        checks = summary["checks"]["direct_pprl_vs_detection_only"]
+        self.assertFalse(checks["same_expected_predictions"])
+        self.assertFalse(checks["same_fake_model_set"])
+
+    def test_recovery_must_keep_visual_camera_dependence(self) -> None:
+        summary = build_summary(
+            camera_eval(0.74, 0.86),
+            camera_eval(0.75, 0.87),
+            camera_eval(0.55, 0.86, opposite=0.50),
+            vif_eval(0.60, 0.60),
+            vif_eval(0.60, 0.60),
+            vif_eval(0.60, 0.60),
+            vif_eval(0.62, 0.62),
+            vif_eval(0.60, 0.60),
+        )
+        self.assertEqual(summary["status"], "no_detection_transfer")
+        self.assertFalse(
+            summary["checks"]["camera"]["recovery_depends_on_matched_frames"]
+        )
 
 
 if __name__ == "__main__":

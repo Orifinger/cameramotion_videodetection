@@ -53,6 +53,7 @@ DATAA_DETECTION_JSON="${DATAA_DETECTION_JSON:-${PROJECT_ROOT}/res/dataA_v1/autol
 DATAA_CAMERA_JSONL="${DATAA_CAMERA_JSONL:-${PROJECT_ROOT}/camera/camerajson/dataa_cameramotion_labels_40step_v3.jsonl}"
 DATAB_DETECTION_JSON="${DATAB_DETECTION_JSON:-/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/detection/v4vif_2766busterall_trainall.json}"
 DATAB_CAMERA_JSONL="${DATAB_CAMERA_JSONL:-/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/datab_cameramotion_labels_final/datab_cameramotion_labels_v2.jsonl}"
+DETECTION_ONLY_VIF_REFERENCE="${DETECTION_ONLY_VIF_REFERENCE:-${PROJECT_ROOT}/res/camera_joint_sft_gate/vif_four_model_compare/branches/detection-only/eval/camera_adapter_vifbench_eval.json}"
 
 PPRL_RECORDS="${PPRL_RECORDS:-1024}"
 PPRL_SMOKE_RECORDS="${PPRL_SMOKE_RECORDS:-32}"
@@ -61,8 +62,10 @@ PPRL_LORA_ALPHA="${PPRL_LORA_ALPHA:-64}"
 PPRL_LR="${PPRL_LR:-1e-6}"
 PPRL_EPOCHS="${PPRL_EPOCHS:-1.0}"
 NUM_GENERATIONS="${NUM_GENERATIONS:-8}"
-PPRL_TEMPERATURE="${PPRL_TEMPERATURE:-0.7}"
+PPRL_TEMPERATURE="${PPRL_TEMPERATURE:-1.0}"
 PPRL_BETA="${PPRL_BETA:-0.04}"
+PPRL_MAX_RESAMPLE_TIMES="${PPRL_MAX_RESAMPLE_TIMES:-3}"
+PPRL_SMOKE_MAX_ZERO_STD_RATE="${PPRL_SMOKE_MAX_ZERO_STD_RATE:-0.80}"
 RECOVERY_LORA_RANK="${RECOVERY_LORA_RANK:-16}"
 RECOVERY_LORA_ALPHA="${RECOVERY_LORA_ALPHA:-32}"
 RECOVERY_LR="${RECOVERY_LR:-5e-6}"
@@ -129,10 +132,15 @@ training_type_option() {
 
 persist_small_results() {
   mkdir -p "${PERSIST_ROOT}"
+  if [[ -d "${PREFLIGHT_ROOT}" ]]; then
+    mkdir -p "${PERSIST_ROOT}/preflight"
+    find "${PREFLIGHT_ROOT}" -maxdepth 1 -type f -exec cp -a {} "${PERSIST_ROOT}/preflight/" \;
+  fi
   for file in \
     "${PPRL_DATA}" \
     "${PPRL_SMOKE_DATA}" \
     "${PPRL_DATA_SUMMARY}" \
+    "${WORK_ROOT}/smoke/smoke_reward_audit.json" \
     "${CAMERA_EVAL_ROOT}/warm_joint_sft.json" \
     "${CAMERA_EVAL_ROOT}/camera_pprl.json" \
     "${CAMERA_EVAL_ROOT}/detection_recovery.json" \
@@ -202,9 +210,11 @@ preflight() {
   require_file "${DATAB_CAMERA_JSONL}"
   require_file "rl/camera_detection_rewards.py"
   require_file "tools/build_camera_pprl_binary.py"
+  require_file "tools/audit_camera_pprl_smoke.py"
   require_file "scripts/camera_detection_retention/run_vifbench.sh"
   require_file "${KEEP_ALIVE_SCRIPT}"
   command -v "${SWIFT_BIN}" >/dev/null
+  command -v torchrun >/dev/null
   command -v ossutil64 >/dev/null
   mkdir -p "${PREFLIGHT_ROOT}"
   (
@@ -214,7 +224,8 @@ preflight() {
   )
   for option in --rlhf_type --external_plugins --reward_funcs --reward_weights \
     --num_generations --use_vllm --vllm_mode --vllm_tensor_parallel_size \
-    --freeze_vit --freeze_aligner --loss_type --sleep_level
+    --freeze_vit --freeze_aligner --loss_type --sleep_level \
+    --dynamic_sample --max_resample_times
   do
     if ! help_has "${PREFLIGHT_ROOT}/swift_rlhf_help.txt" "${option}"; then
       echo "Current ms-swift rlhf CLI is missing required option: ${option}" >&2
@@ -236,6 +247,8 @@ import swift
 from rl.camera_detection_rewards import orms
 
 assert torch.cuda.device_count() == ${NUM_GPUS}, (torch.cuda.device_count(), ${NUM_GPUS})
+assert ${NUM_GPUS} % ${VLLM_TP} == 0, (${NUM_GPUS}, ${VLLM_TP})
+assert (${NUM_GPUS} * 1 * 1) % ${NUM_GENERATIONS} == 0, (${NUM_GPUS}, ${NUM_GENERATIONS})
 assert "camera_binary_acc" in orms
 assert "camera_binary_format" in orms
 payload = {
@@ -248,6 +261,10 @@ payload = {
     "gpus": torch.cuda.device_count(),
     "base_model": "${BASE_MODEL}",
     "correct_sft_adapter": "${CORRECT_SFT_ADAPTER}",
+    "vllm_tensor_parallel_size": ${VLLM_TP},
+    "num_generations": ${NUM_GENERATIONS},
+    "detection_only_vif_reference": "${DETECTION_ONLY_VIF_REFERENCE}",
+    "detection_only_vif_reference_present": Path("${DETECTION_ONLY_VIF_REFERENCE}").is_file(),
 }
 try:
     payload["swift_distribution_version"] = importlib.metadata.version("ms-swift")
@@ -258,9 +275,51 @@ Path("${PREFLIGHT_ROOT}/environment_audit.json").write_text(
 )
 print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
+  "${PYTHON_BIN}" - <<PY
+import json
+from pathlib import Path
+
+dataset = Path("${DATAB_DETECTION_JSON}")
+with dataset.open("r", encoding="utf-8-sig") as handle:
+    rows = json.load(handle)
+if not isinstance(rows, list) or not rows:
+    raise ValueError(f"DataB detection replay is not a non-empty JSON list: {dataset}")
+image_refs = [
+    str(path)
+    for row in rows
+    if isinstance(row, dict)
+    for path in row.get("images", [])
+]
+missing = [path for path in image_refs if not Path(path).is_file()]
+audit = {
+    "status": "passed" if not missing else "failed",
+    "dataset": str(dataset),
+    "records": len(rows),
+    "image_references": len(image_refs),
+    "missing_image_references": len(missing),
+    "first_missing": missing[:20],
+}
+Path("${PREFLIGHT_ROOT}/datab_replay_asset_audit.json").write_text(
+    json.dumps(audit, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+)
+print(json.dumps(audit, ensure_ascii=False, indent=2))
+if missing:
+    raise SystemExit(2)
+PY
+  STAGE=preflight \
+  PROJECT_ROOT="${PROJECT_ROOT}" \
+  MODEL_PATH="${BASE_MODEL}" \
+  ADAPTER_PATH="${CORRECT_SFT_ADAPTER}" \
+  RUN_ROOT="${PREFLIGHT_ROOT}/vifbench" \
+  PERSIST_ROOT="${PERSIST_ROOT}/preflight/vifbench" \
+  NUM_GPUS="${NUM_GPUS}" \
+  KEEP_ALIVE_AFTER_RUN=0 \
+  bash scripts/camera_detection_retention/run_vifbench.sh
   mkdir -p "${PERSIST_ROOT}/preflight"
-  cp -a "${PREFLIGHT_ROOT}/environment_audit.json" "${PERSIST_ROOT}/preflight/"
-  echo "Preflight passed. No model loading or training was run."
+  cp -a "${PREFLIGHT_ROOT}/environment_audit.json" \
+    "${PREFLIGHT_ROOT}/datab_replay_asset_audit.json" \
+    "${PERSIST_ROOT}/preflight/"
+  echo "Preflight passed. No model weights, inference, or training were run."
 }
 
 build_joint_data_if_needed() {
@@ -386,7 +445,7 @@ append_optional_grpo_args() {
     target_array+=(--dynamic_sample true)
   fi
   if help_has "${help_file}" "--max_resample_times"; then
-    target_array+=(--max_resample_times 2)
+    target_array+=(--max_resample_times "${PPRL_MAX_RESAMPLE_TIMES}")
   fi
   if help_has "${help_file}" "--log_entropy"; then
     target_array+=(--log_entropy true)
@@ -439,7 +498,7 @@ run_grpo() {
     --dataloader_num_workers 4
     --num_generations "${NUM_GENERATIONS}"
     --temperature "${PPRL_TEMPERATURE}"
-    --top_p 0.9
+    --top_p 1.0
     --beta "${PPRL_BETA}"
     --loss_type grpo
     --use_vllm true
@@ -473,8 +532,24 @@ run_smoke() {
   if [[ -d "${smoke_root}" ]]; then
     mv "${smoke_root}" "${smoke_root}.old.$(date +%Y%m%d_%H%M%S)"
   fi
-  PPRL_EPOCHS=1.0 run_grpo "${PPRL_SMOKE_DATA}" "${smoke_root}" 9999
+  if ! PPRL_EPOCHS=1.0 run_grpo "${PPRL_SMOKE_DATA}" "${smoke_root}" 9999; then
+    if [[ "${VLLM_ENABLE_LORA}" != "1" ]]; then
+      return 1
+    fi
+    echo "Smoke failed with vLLM LoRA-only sync; retrying once with full weight sync."
+    VLLM_ENABLE_LORA=0
+    if [[ -d "${smoke_root}" ]]; then
+      mv "${smoke_root}" "${smoke_root}.lora_sync_failed.$(date +%Y%m%d_%H%M%S)"
+    fi
+    PPRL_EPOCHS=1.0 run_grpo "${PPRL_SMOKE_DATA}" "${smoke_root}" 9999
+  fi
   resolve_adapter_dir "${smoke_root}" >/dev/null
+  "${PYTHON_BIN}" tools/audit_camera_pprl_smoke.py \
+    --train-dir "${smoke_root}" \
+    --output-json "${smoke_root}/smoke_reward_audit.json" \
+    --max-zero-std-rate "${PPRL_SMOKE_MAX_ZERO_STD_RATE}" \
+    --min-log-points 2
+  persist_small_results
   echo "Camera-PPRL distributed smoke passed."
 }
 
@@ -637,7 +712,7 @@ run_vif_recovery() {
 
 summarize_all() {
   local summary="${WORK_ROOT}/camera_pprl_final_summary.json"
-  "${PYTHON_BIN}" -m scripts.camera_pprl.summarize \
+  local -a args=(
     --warm-camera-eval "${CAMERA_EVAL_ROOT}/warm_joint_sft.json" \
     --pprl-camera-eval "${CAMERA_EVAL_ROOT}/camera_pprl.json" \
     --recovery-camera-eval "${CAMERA_EVAL_ROOT}/detection_recovery.json" \
@@ -646,6 +721,13 @@ summarize_all() {
     --recovery-vif-base-eval "${VIF_RECOVERY_ROOT}/eval/base_vifbench_eval.json" \
     --recovery-vif-model-eval "${VIF_RECOVERY_ROOT}/eval/camera_adapter_vifbench_eval.json" \
     --output-json "${summary}"
+  )
+  if [[ -f "${DETECTION_ONLY_VIF_REFERENCE}" ]]; then
+    args+=(--detection-only-vif-reference "${DETECTION_ONLY_VIF_REFERENCE}")
+  else
+    echo "Detection-only ViF reference is not available yet; final status will remain pending if the PPRL core gate passes."
+  fi
+  "${PYTHON_BIN}" -m scripts.camera_pprl.summarize "${args[@]}"
   persist_small_results
 }
 
