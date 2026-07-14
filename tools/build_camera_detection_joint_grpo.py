@@ -16,10 +16,11 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
 
-from tools.build_camera_joint_sft_gate import (  # noqa: E402
+from build_camera_joint_sft_gate import (  # noqa: E402
     CAMERA_LABEL_ORDER,
     canonical_labels,
     coarse_signature,
