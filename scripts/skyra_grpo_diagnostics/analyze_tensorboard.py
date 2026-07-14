@@ -287,7 +287,6 @@ def make_plots(frame: pd.DataFrame, output_dir: Path, window: int) -> None:
         ["reward_extra/grpo_group_reward_std_mean"],
         ["mean within-group reward std"],
         window,
-        ylim=(0.0, None) if False else None,
     )
     axes[1].set_title("Within-group reward variation")
     save_figure(fig, output_dir, "04_grpo_learning_signal.png")
