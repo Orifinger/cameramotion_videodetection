@@ -54,12 +54,17 @@ class CameraJointDataTests(unittest.TestCase):
             "dataA_v1_00002", visual_no, "pan-left", "No", "pan-left:0000",
             "test", "correct", False,
         )
+        no["images"].append("/frames/dataA_v1_00002/real/0003.png")
+        builder.align_camera_prompt_frames(no)
         opposite = builder.opposite_frame_controls([yes, no])
         self.assertEqual(opposite[0]["images"], no["images"])
         self.assertEqual(opposite[0]["answer"], yes["answer"])
+        self.assertEqual(builder.image_token_count(opposite[0]), len(opposite[0]["images"]))
+        self.assertEqual(builder.image_token_count(opposite[1]), len(opposite[1]["images"]))
         no_frames = builder.no_frame_controls([yes, no])
         self.assertFalse(no_frames[0]["images"])
         self.assertNotIn("<image>", no_frames[0]["messages"][-1]["content"])
+        self.assertEqual(builder.image_token_count(no_frames[0]), 0)
 
     def test_full_builder_makes_equal_causal_branches(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -23,7 +23,6 @@ from scripts.camera_binary_vqa.build_data import CAMERA_QUESTIONS
 
 
 CASE_RE = re.compile(r"(dataA_v1_(?:dataset_v2_|textedit_reserve_)?\d+)/(real|fake)")
-FRAME_LINE_RE = re.compile(r"^Frame \d+: <image>\n?", re.MULTILINE)
 ANSWER_RE = re.compile(r"<answer>\s*(Fake|Real)\s*</answer>", re.IGNORECASE)
 CAMERA_LABEL_ORDER = tuple(label for label, _ in CAMERA_QUESTIONS)
 QUESTION_BY_LABEL = dict(CAMERA_QUESTIONS)
@@ -266,6 +265,42 @@ def camera_prompt(num_frames: int, question: str) -> str:
     return f"Ordered frames:\n{frames}\n\nQuestion: {question}\nAnswer exactly Yes or No."
 
 
+def align_camera_prompt_frames(row: dict[str, Any]) -> None:
+    """Keep visual placeholders aligned after a control swaps or removes frames."""
+    messages = row.get("messages")
+    images = row.get("images")
+    if not isinstance(messages, list) or not isinstance(images, list):
+        raise ValueError("camera record must contain messages and images lists")
+    candidates = [
+        message
+        for message in messages
+        if isinstance(message, dict)
+        and message.get("role") == "user"
+        and str(message.get("content", "")).startswith("Ordered frames:\n")
+    ]
+    if len(candidates) != 1:
+        raise ValueError(f"expected one ordered-frame user message, found {len(candidates)}")
+    message = candidates[0]
+    content = str(message.get("content", ""))
+    separator = "\n\nQuestion:"
+    if separator not in content:
+        raise ValueError("camera user message has no Question separator")
+    _, suffix = content.split(separator, 1)
+    frames = "\n".join(f"Frame {index + 1}: <image>" for index in range(len(images)))
+    message["content"] = f"Ordered frames:\n{frames}{separator}{suffix}"
+
+
+def image_token_count(row: Mapping[str, Any]) -> int:
+    messages = row.get("messages", [])
+    if not isinstance(messages, list):
+        return -1
+    return sum(
+        str(message.get("content", "")).count("<image>")
+        for message in messages
+        if isinstance(message, Mapping)
+    )
+
+
 def make_binary_camera_record(
     case_id: str,
     visual_record: Mapping[str, Any],
@@ -380,6 +415,7 @@ def opposite_frame_controls(rows: Sequence[Mapping[str, Any]]) -> list[dict[str,
         for original, donor in ((yes, no), (no, yes)):
             controlled = copy.deepcopy(dict(original))
             controlled["images"] = list(donor["images"])
+            align_camera_prompt_frames(controlled)
             controlled["visual_source_case_id"] = donor["case_id"]
             controlled["visual_condition"] = "opposite_answer_frames"
             controlled["sample_id"] = str(original["sample_id"])
@@ -392,7 +428,7 @@ def no_frame_controls(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
     for source in rows:
         row = copy.deepcopy(dict(source))
         row["images"] = []
-        row["messages"][-1]["content"] = FRAME_LINE_RE.sub("", row["messages"][-1]["content"])
+        align_camera_prompt_frames(row)
         row["visual_source_case_id"] = None
         row["visual_condition"] = "no_frames"
         output.append(row)
@@ -594,6 +630,16 @@ def main() -> None:
     )
     camera_dev_opposite = opposite_frame_controls(camera_dev)
     camera_dev_no_frames = no_frame_controls(camera_dev)
+    camera_dev_conditions = camera_dev + camera_dev_opposite + camera_dev_no_frames
+    token_path_mismatches = [
+        str(row.get("sample_id"))
+        for row in camera_dev_conditions
+        if image_token_count(row) != len(row.get("images", []))
+    ]
+    if token_path_mismatches:
+        raise AssertionError(
+            "camera dev image token/path mismatches; first=" + token_path_mismatches[0]
+        )
 
     if args.check_images:
         all_images = {
@@ -742,6 +788,9 @@ def main() -> None:
             "opposite_frames_records": len(camera_dev_opposite),
             "no_frames_records": len(camera_dev_no_frames),
             "opposite_frames_keep_question_and_gold_answer": True,
+            "matched_frame_count_distribution": dict(
+                sorted(Counter(len(row["images"]) for row in camera_dev).items())
+            ),
         },
         "detection_replay": replay_audit,
         "joint_task_ratio": {
@@ -774,6 +823,7 @@ def main() -> None:
             "camera_dev_has_no_assistant_gold_in_prompt": all(
                 row["messages"][-1]["role"] == "user" for row in camera_dev
             ),
+            "camera_dev_image_tokens_match_paths": not token_path_mismatches,
             "datab_is_replay_not_held_out": True,
         },
         "outputs": outputs,
