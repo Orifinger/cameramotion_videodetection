@@ -106,7 +106,7 @@ def main() -> None:
         next_action = "先修复相机任务、视觉依赖或采样奖励信号，再投入 RL。"
 
     summary = {
-        "gate": "同一 16 帧上的二元相机 VQA 与检测 replay 联合 SFT 验收",
+        "gate": "同一有序抽帧序列上的二元相机 VQA 与检测 replay 联合 SFT 验收",
         "status": status,
         "what_was_tested": (
             "三个等样本数 LoRA 分支从同一检测 checkpoint 出发并共享检测 replay；"

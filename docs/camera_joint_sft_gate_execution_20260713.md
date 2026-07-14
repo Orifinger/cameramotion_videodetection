@@ -177,6 +177,13 @@ STAGE=summarize_camera_pair bash "$RUN"
 
 只有该门通过，才继续第 6 节采样检查和仅检测回放训练。未通过时先停止并检查 per-label 指标，不花第三次训练计算。
 
+仅检测回放分支训练完成后，只补测该分支并复用已有正确/翻转结果：
+
+```bash
+STAGE=eval_camera_detection_only bash "$RUN"
+STAGE=summarize bash "$RUN"
+```
+
 ## 6. 短程 RL 前的采样检查
 
 ```bash

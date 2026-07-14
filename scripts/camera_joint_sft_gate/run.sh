@@ -349,6 +349,7 @@ case "${STAGE}" in
   train_detection_only) train_branch detection_only ;;
   train_correct_camera) train_branch correct_camera ;;
   train_shuffled_camera) train_branch shuffled_camera ;;
+  eval_camera_detection_only) infer_and_evaluate_camera_branch detection_only "${DETECTION_ONLY_ADAPTER}" ;;
   eval_camera_correct) infer_and_evaluate_camera_branch correct_camera "${CORRECT_ADAPTER}" ;;
   eval_camera_shuffled) infer_and_evaluate_camera_branch shuffled_camera "${SHUFFLED_ADAPTER}" ;;
   summarize_camera_pair) summarize_camera_pair ;;
