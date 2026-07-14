@@ -9,31 +9,192 @@ import hashlib
 import json
 import random
 import re
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOLS_DIR = Path(__file__).resolve().parent
-if str(TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(TOOLS_DIR))
-
-from build_camera_joint_sft_gate import (  # noqa: E402
-    CAMERA_LABEL_ORDER,
-    canonical_labels,
-    coarse_signature,
-    data_parent,
-    dataa_identity,
-    detection_label,
-    load_camera,
-    load_camera_by_path,
-    motion_bucket,
-    normalized_path,
-    read_json,
-    source_family,
+CAMERA_LABEL_ORDER = (
+    "very-unsteady",
+    "unsteady",
+    "minimal-shaking",
+    "no-shaking",
+    "complex-motion",
+    "minor-motion",
+    "no-motion",
+    "fast-speed",
+    "regular-speed",
+    "slow-speed",
+    "dolly-in",
+    "dolly-out",
+    "truck-left",
+    "truck-right",
+    "pedestal-up",
+    "pedestal-down",
+    "pan-left",
+    "pan-right",
+    "tilt-up",
+    "tilt-down",
+    "roll-CW",
+    "roll-CCW",
+    "zoom-in",
+    "zoom-out",
+    "arc-CW",
+    "arc-CCW",
+    "side-tracking",
+    "lead-tracking",
+    "tail-tracking",
+    "aerial-tracking",
+    "arc-tracking",
+    "pan-tracking",
+    "tilt-tracking",
 )
+CASE_RE = re.compile(r"(dataA_v1_(?:dataset_v2_|textedit_reserve_)?\d+)/(real|fake)")
+ANSWER_RE = re.compile(r"<answer>\s*(Fake|Real)\s*</answer>", re.IGNORECASE)
+LABEL_LOOKUP = {label.casefold().replace("_", "-"): label for label in CAMERA_LABEL_ORDER}
+MOTION_BUCKETS = ("complex-motion", "minor-motion", "no-motion")
+
+
+def read_json(path: str | Path) -> Any:
+    with Path(path).open("r", encoding="utf-8-sig") as handle:
+        return json.load(handle)
+
+
+def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with Path(path).open("r", encoding="utf-8-sig") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if not isinstance(value, Mapping):
+                raise ValueError(f"JSONL row is not an object at {path}:{line_number}")
+            rows.append(dict(value))
+    return rows
+
+
+def normalized_path(value: Any) -> str:
+    return str(value or "").replace("\\", "/")
+
+
+def first_image(record: Mapping[str, Any]) -> str:
+    images = record.get("images")
+    return normalized_path(images[0]) if isinstance(images, list) and images else ""
+
+
+def identity_from_path(value: Any) -> tuple[str, str] | None:
+    match = CASE_RE.search(normalized_path(value))
+    return (match.group(1), match.group(2)) if match else None
+
+
+def dataa_identity(record: Mapping[str, Any]) -> tuple[str, str] | None:
+    return identity_from_path(first_image(record))
+
+
+def source_family(case_id: str) -> str:
+    if "textedit_reserve" in case_id:
+        return "vace13b_textedit_40step_v3"
+    if "dataset_v2" in case_id:
+        return "vace13b_dataset_40step_v3"
+    return "vace14b_reused"
+
+
+def canonical_labels(values: Any) -> tuple[str, ...]:
+    if isinstance(values, str):
+        raw_values: Sequence[Any] = [values]
+    elif isinstance(values, Sequence):
+        raw_values = values
+    else:
+        raw_values = []
+    selected: set[str] = set()
+    unknown: list[str] = []
+    for value in raw_values:
+        cleaned = str(value).strip()
+        folded = cleaned.casefold().replace("_", "-")
+        if not cleaned or folded == "static":
+            continue
+        label = LABEL_LOOKUP.get(folded)
+        if label is None:
+            unknown.append(cleaned)
+        else:
+            selected.add(label)
+    if unknown:
+        raise ValueError(f"unknown camera labels: {sorted(set(unknown))}")
+    return tuple(label for label in CAMERA_LABEL_ORDER if label in selected)
+
+
+def motion_bucket(labels: Sequence[str]) -> str:
+    present = set(labels)
+    return next((label for label in MOTION_BUCKETS if label in present), "unknown")
+
+
+def assistant_text(record: Mapping[str, Any]) -> str:
+    messages = record.get("messages")
+    if isinstance(messages, list):
+        for message in reversed(messages):
+            if isinstance(message, Mapping) and message.get("role") == "assistant":
+                return str(message.get("content", ""))
+    return ""
+
+
+def detection_label(record: Mapping[str, Any]) -> str:
+    path = first_image(record).casefold()
+    if "/fake/" in path:
+        return "Fake"
+    if "/real/" in path:
+        return "Real"
+    match = ANSWER_RE.search(assistant_text(record))
+    return match.group(1).title() if match else "UNKNOWN"
+
+
+def load_camera(path: str | Path) -> dict[str, dict[str, Any]]:
+    output: dict[str, dict[str, Any]] = {}
+    for row in read_jsonl(path):
+        identity = identity_from_path(row.get("path"))
+        if identity is None:
+            continue
+        case_id, kind = identity
+        labels = canonical_labels(row.get("labels"))
+        caption = str(row.get("caption") or "").strip()
+        candidate = {"labels": labels, "caption": caption, "source_kind": kind}
+        previous = output.get(case_id)
+        if previous is None or kind == "real":
+            output[case_id] = candidate
+        elif previous["labels"] != labels:
+            raise ValueError(f"conflicting camera labels for {case_id}")
+    if not output:
+        raise ValueError(f"no DataA camera annotations found: {path}")
+    return output
+
+
+def data_parent(record: Mapping[str, Any]) -> str:
+    path = first_image(record)
+    return path.rsplit("/", 1)[0].rstrip("/") if "/" in path else path.rstrip("/")
+
+
+def load_camera_by_path(path: str | Path) -> dict[str, tuple[str, ...]]:
+    output: dict[str, tuple[str, ...]] = {}
+    for row in read_jsonl(path):
+        key = normalized_path(row.get("path")).rstrip("/")
+        if key:
+            output[key] = canonical_labels(row.get("labels"))
+    return output
+
+
+def coarse_signature(labels: Sequence[str]) -> tuple[str, str, str]:
+    present = set(labels)
+
+    def choose(order: Sequence[str], default: str) -> str:
+        return next((label for label in order if label in present), default)
+
+    return (
+        choose(MOTION_BUCKETS, "motion-unknown"),
+        choose(("fast-speed", "regular-speed", "slow-speed"), "speed-unknown"),
+        choose(
+            ("very-unsteady", "unsteady", "minimal-shaking", "no-shaking"),
+            "steadiness-unknown",
+        ),
+    )
 
 
 JOINT_SYSTEM_PROMPT = (
