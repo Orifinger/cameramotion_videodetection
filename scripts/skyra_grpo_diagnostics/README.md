@@ -27,3 +27,5 @@
 所有逐样本 rollout 暂存在 `/tmp/1res/skyra_grpo_diagnostics/<run>/rollouts`。压缩后的曲线 CSV、摘要、TensorBoard 和日志写入 NAS 的 `res/skyra_grpo_diagnostics/<run>`。
 
 `run.sh` 默认仍使用 `SAVE_FREQ=-1`，只做曲线诊断；需要固定评测时显式设置正整数保存间隔。`run_evalable_100step.sh` 固定复跑论文式奖励 100 步，并且只改变 checkpoint 保存：step 50 和 step 100 写入 `/tmp`，训练结束后将整个运行目录上传 OSS，再启动 `/input/training/keep.sh`。该 wrapper 不改变数据、seed、奖励、batch、group size、学习率、KL 或回复长度。
+
+`run_vifbench.sh` 使用 V4Train 已有的原始 no-camera 检测提示词和全量 VIF-Bench index，同时评测合并后的 step 50 与 step 100。原检测 checkpoint 的严格同提示词结果直接复用持久化的 `base_vifbench_eval.json`，避免无信息增量的第三次完整推理。逐条预测留在 `/tmp`，比较 JSON、官方评测 CSV 和日志写入 NAS；这项评测不使用 camera 数据。
