@@ -43,6 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shuffled-readiness")
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--min-supported-labels", type=int, default=20)
+    parser.add_argument("--min-correct-minus-detection-only-macro-ap", type=float, default=0.03)
+    parser.add_argument("--min-correct-minus-detection-only-balanced", type=float, default=0.05)
     parser.add_argument("--min-correct-minus-shuffled-macro-ap", type=float, default=0.03)
     parser.add_argument("--min-correct-minus-shuffled-balanced", type=float, default=0.05)
     parser.add_argument("--min-opposite-frame-drop", type=float, default=0.10)
@@ -61,6 +63,14 @@ def main() -> None:
     shuffled_readiness = read_json(args.shuffled_readiness) if args.shuffled_readiness else None
 
     deltas = {
+        "correct_minus_detection_only_macro_average_precision": (
+            correct["macro"]["average_precision"]
+            - detection_only["macro"]["average_precision"]
+        ),
+        "correct_minus_detection_only_balanced_accuracy": (
+            correct["overall"]["balanced_accuracy"]
+            - detection_only["overall"]["balanced_accuracy"]
+        ),
         "correct_minus_shuffled_macro_average_precision": (
             correct["macro"]["average_precision"] - shuffled["macro"]["average_precision"]
         ),
@@ -79,6 +89,12 @@ def main() -> None:
         "enough_supported_camera_primitives": (
             correct["num_supported_labels"] >= args.min_supported_labels
         ),
+        "correct_supervision_beats_detection_only": (
+            deltas["correct_minus_detection_only_macro_average_precision"]
+            >= args.min_correct_minus_detection_only_macro_ap
+            or deltas["correct_minus_detection_only_balanced_accuracy"]
+            >= args.min_correct_minus_detection_only_balanced
+        ),
         "correct_supervision_beats_flipped_targets": (
             deltas["correct_minus_shuffled_macro_average_precision"]
             >= args.min_correct_minus_shuffled_macro_ap
@@ -95,7 +111,9 @@ def main() -> None:
         status = "passed_for_short_rl"
         next_action = "先做 DataA 与 VIF-Bench 无相机文本检测保留评测，再进入短程 GRPO。"
     elif (
-        checks["camera_answers_depend_on_visual_frames"]
+        checks["correct_supervision_beats_detection_only"]
+        and checks["correct_supervision_beats_flipped_targets"]
+        and checks["camera_answers_depend_on_visual_frames"]
         and checks["rl_exploration_available"]
         and checks["enough_supported_camera_primitives"]
     ):
@@ -114,6 +132,12 @@ def main() -> None:
         ),
         "thresholds": {
             "min_supported_labels": args.min_supported_labels,
+            "min_correct_minus_detection_only_macro_ap": (
+                args.min_correct_minus_detection_only_macro_ap
+            ),
+            "min_correct_minus_detection_only_balanced": (
+                args.min_correct_minus_detection_only_balanced
+            ),
             "min_correct_minus_shuffled_macro_ap": args.min_correct_minus_shuffled_macro_ap,
             "min_correct_minus_shuffled_balanced": args.min_correct_minus_shuffled_balanced,
             "min_opposite_frame_drop": args.min_opposite_frame_drop,
