@@ -81,13 +81,15 @@ preflight() {
   require_dir "${STEP100_MODEL}"
   require_file "${STEP100_MODEL}/config.json"
   require_file "${BASE_EVAL_JSON}"
+  require_file "${SCRIPT_DIR}/vifbench_eval.py"
+  require_file "${SCRIPT_DIR}/compare_vifbench.py"
   require_file "${INFER_SCRIPT}"
   require_file "${OFFICIAL_EVAL_PY}"
   require_dir "${INDEX_DIR}"
   require_file "${SYSTEM_PROMPT_FILE}"
   require_file "${USER_PROMPT_SUFFIX_FILE}"
   require_file "${KEEP_ALIVE_SCRIPT}"
-  "${PYTHON_BIN}" -m scripts.skyra_grpo_diagnostics.vifbench_eval audit \
+  "${PYTHON_BIN}" "${SCRIPT_DIR}/vifbench_eval.py" audit \
     --index-dir "${INDEX_DIR}" \
     --system-prompt-file "${SYSTEM_PROMPT_FILE}" \
     --user-prompt-suffix-file "${USER_PROMPT_SUFFIX_FILE}" \
@@ -149,7 +151,7 @@ evaluate_one() {
   local merged_json="$2"
   local eval_json="$3"
   local official_log="$4"
-  "${PYTHON_BIN}" -m scripts.skyra_grpo_diagnostics.vifbench_eval evaluate-one \
+  "${PYTHON_BIN}" "${SCRIPT_DIR}/vifbench_eval.py" evaluate-one \
     --index-dir "${INDEX_DIR}" \
     --prediction-dir "${prediction_dir}" \
     --merged-json "${merged_json}" \
@@ -165,7 +167,7 @@ evaluate_all() {
     "${STEP50_EVAL_JSON}" "${EVAL_ROOT}/step50_official_eval.log"
   evaluate_one "${STEP100_PRED_DIR}" "${STEP100_MERGED_JSON}" \
     "${STEP100_EVAL_JSON}" "${EVAL_ROOT}/step100_official_eval.log"
-  "${PYTHON_BIN}" -m scripts.skyra_grpo_diagnostics.compare_vifbench \
+  "${PYTHON_BIN}" "${SCRIPT_DIR}/compare_vifbench.py" \
     --base-json "${BASE_EVAL_JSON}" \
     --step50-json "${STEP50_EVAL_JSON}" \
     --step100-json "${STEP100_EVAL_JSON}" \
