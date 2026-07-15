@@ -8,6 +8,7 @@ from pathlib import Path
 
 from scripts.camera_hard_route_gate.route_manifest import (
     aggregate_routes,
+    audit_binary_routes,
     build_vif_inputs,
     compose_predictions,
     summarize_gate,
@@ -85,6 +86,57 @@ class CameraRouteBucketTest(unittest.TestCase):
 
 
 class CameraRouteManifestTest(unittest.TestCase):
+    def test_binary_audit_merges_minor_and_complex_without_retraining(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "three_class.jsonl"
+            output_path = root / "binary.jsonl"
+            summary_path = root / "summary.json"
+            rows = []
+            definitions = [
+                ("case-1", "no-motion", "no-motion"),
+                ("case-2", "no-motion", "no-motion"),
+                ("case-3", "minor-motion", "complex-motion"),
+                ("case-4", "complex-motion", "minor-motion"),
+            ]
+            for case_id, gold, predicted in definitions:
+                for visual_kind in ("real", "fake"):
+                    rows.append(
+                        {
+                            "video_id": f"{case_id}:{visual_kind}",
+                            "case_id": case_id,
+                            "visual_kind": visual_kind,
+                            "source_family": "test-family",
+                            "route_gold_bucket": gold,
+                            "predicted_bucket": predicted,
+                        }
+                    )
+            write_jsonl(input_path, rows)
+            audit_binary_routes(
+                argparse.Namespace(
+                    input_manifest=str(input_path),
+                    output_manifest=str(output_path),
+                    output_summary=str(summary_path),
+                    min_coverage=1.0,
+                    min_accuracy=0.75,
+                    min_balanced_accuracy=0.75,
+                    min_per_route_recall=0.70,
+                    min_pair_consistency=0.90,
+                )
+            )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            binary_rows = [json.loads(line) for line in output_path.read_text().splitlines()]
+            self.assertEqual(summary["status"], "passed")
+            self.assertEqual(summary["metrics"]["accuracy"], 1.0)
+            self.assertEqual(summary["metrics"]["real_fake_pair_route_consistency"], 1.0)
+            self.assertTrue(all(row["binary_predicted_bucket"] in {"no-motion", "motion"} for row in binary_rows))
+            self.assertTrue(
+                all(
+                    row["binary_wrong_route_bucket"] != row["binary_predicted_bucket"]
+                    for row in binary_rows
+                )
+            )
+
     def test_build_vif_inputs_uses_exact_index_frames(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

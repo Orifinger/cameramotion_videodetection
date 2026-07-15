@@ -76,6 +76,8 @@ DATAA_ROUTE_INPUT="${DATA_DIR}/dataa_route_dev_questions.jsonl"
 DATAA_ROUTE_PRED_DIR="${ROUTE_ROOT}/dataa_scores"
 DATAA_ROUTE_MANIFEST="${ROUTE_ROOT}/dataa_route_manifest.jsonl"
 DATAA_ROUTE_SUMMARY="${ROUTE_ROOT}/dataa_route_summary.json"
+DATAA_BINARY_ROUTE_MANIFEST="${ROUTE_ROOT}/dataa_binary_route_manifest.jsonl"
+DATAA_BINARY_ROUTE_SUMMARY="${ROUTE_ROOT}/dataa_binary_route_summary.json"
 VIF_ROUTE_INPUT="${ROUTE_ROOT}/vifbench_route_questions.jsonl"
 VIF_ROUTE_INPUT_SUMMARY="${ROUTE_ROOT}/vifbench_route_input_summary.json"
 VIF_ROUTE_PRED_DIR="${ROUTE_ROOT}/vifbench_scores"
@@ -124,6 +126,8 @@ persist_small_results() {
   for file in \
     "${DATAA_ROUTE_MANIFEST}" \
     "${DATAA_ROUTE_SUMMARY}" \
+    "${DATAA_BINARY_ROUTE_MANIFEST}" \
+    "${DATAA_BINARY_ROUTE_SUMMARY}" \
     "${VIF_ROUTE_INPUT_SUMMARY}" \
     "${VIF_ROUTE_MANIFEST}" \
     "${VIF_ROUTE_SUMMARY}"
@@ -283,6 +287,20 @@ dataa_route_calibration() {
   aggregate_dataa_routes
 }
 
+audit_dataa_binary_route() {
+  require_file "${DATAA_ROUTE_MANIFEST}"
+  "${PYTHON_BIN}" -m scripts.camera_hard_route_gate.route_manifest audit-binary \
+    --input-manifest "${DATAA_ROUTE_MANIFEST}" \
+    --output-manifest "${DATAA_BINARY_ROUTE_MANIFEST}" \
+    --output-summary "${DATAA_BINARY_ROUTE_SUMMARY}" \
+    --min-coverage 1.0 \
+    --min-accuracy 0.75 \
+    --min-balanced-accuracy 0.75 \
+    --min-per-route-recall 0.70 \
+    --min-pair-consistency 0.90
+  persist_small_results
+}
+
 build_vif_route_inputs() {
   mkdir -p "${ROUTE_ROOT}"
   "${PYTHON_BIN}" -m scripts.camera_hard_route_gate.route_manifest build-vif-inputs \
@@ -406,6 +424,7 @@ case "${STAGE}" in
   score_dataa_route) score_dataa_routes ;;
   aggregate_dataa_route) aggregate_dataa_routes ;;
   calibrate_dataa_route) dataa_route_calibration ;;
+  audit_dataa_binary_route) audit_dataa_binary_route ;;
   build_vif_route_inputs) build_vif_route_inputs ;;
   score_vif_route) score_vif_routes ;;
   aggregate_vif_route) aggregate_vif_routes ;;

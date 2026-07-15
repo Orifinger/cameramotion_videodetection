@@ -58,6 +58,15 @@ cat /tmp/1res/camera_hard_route_gate/v1/routes/dataa_route_summary.json
 
 未达到时，先看 confusion 与分数分布，不训练四个 detection LoRA。阈值调整只需复用现有 score，不重跑 GPU：
 
+2026-07-15 实际结果中，三分类总体 accuracy 为 73.46%、macro recall 为 58.64%、pair consistency 为 92.59%，但 `minor-motion` recall 仅 4.90%，所以三分类门已确定未通过。不要执行本文件后面的三专家 `train_all`。先运行无需训练和 GPU 的二路复核：
+
+```bash
+STAGE=audit_dataa_binary_route bash "$RUN"
+cat /tmp/1res/camera_hard_route_gate/v1/routes/dataa_binary_route_summary.json
+```
+
+二路映射固定为 `no-motion` 对 `motion = minor-motion + complex-motion`，不比较多种映射后挑最好结果。二路门要求 coverage 100%、accuracy 和 Balanced ACC 均至少 75%、两类 recall 均至少 70%、real/fake pair consistency 至少 90%。通过只允许继续实现“共享模型 + 静止专家 + 有运动专家”，不能追认三分类门成功，也不能直接运行当前三专家训练命令。
+
 ```bash
 MIN_ROUTE_PROBABILITY=0.45 MIN_ROUTE_MARGIN=0.08 \
 STAGE=aggregate_dataa_route bash "$RUN"
@@ -72,6 +81,8 @@ ossutil64 cp -r /tmp/1res/camera_hard_route_gate/v1/train/router/ oss://antsys-t
 ```
 
 ## 路由校准通过后：训练共享模型与三个专家
+
+**当前状态：禁止执行本节。** 2026-07-15 三分类路由门已因 `minor-motion` recall 4.90% 未通过；本节仅保留原三分类协议记录。只有二路检测数据和训练入口另行实现并通过审计后，才执行新的二专家命令，不能复用下面的 `train_all`。
 
 router 从同一个 detection checkpoint 开始，LoRA rank 16、alpha 32、学习率 `1e-4`、3 epochs，只学习三个 coarse Yes/No 问题。每个问题内部 Yes/No 等量，三个问题之间的记录数也严格相同，避免 complex question 因出现更频繁而获得额外先验。四个 detection 分支同样从该原始 detection checkpoint 开始，不挂载 router，只训练 detection 输出；训练 prompt 中没有 camera 文本。共享分支的数据是三个专家数据的精确不重叠并集。detection LoRA 默认 rank 16、alpha 32、学习率 `5e-5`、2 epochs，冻结视觉塔和多模态 projector。
 

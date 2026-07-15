@@ -31,6 +31,8 @@ CYCLIC_ROUTE = {
     "minor-motion": "complex-motion",
     "complex-motion": "no-motion",
 }
+BINARY_ROUTE_BUCKETS = ("no-motion", "motion")
+BINARY_WRONG_ROUTE = {"no-motion": "motion", "motion": "no-motion"}
 
 
 def read_json(path: str | Path) -> Any:
@@ -271,6 +273,206 @@ def route_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
         "real_fake_pair_route_consistency": pair_consistency,
         "num_complete_real_fake_pairs": len(complete_pairs),
     }
+
+
+def binary_bucket(bucket: str) -> str:
+    if bucket == "no-motion":
+        return "no-motion"
+    if bucket in {"minor-motion", "complex-motion"}:
+        return "motion"
+    raise ValueError(f"cannot map camera route bucket to binary route: {bucket!r}")
+
+
+def binary_route_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    confusion = {bucket: Counter() for bucket in BINARY_ROUTE_BUCKETS}
+    pair_predictions: dict[str, dict[str, str]] = defaultdict(dict)
+    for row in rows:
+        gold = str(row["binary_gold_bucket"])
+        predicted = str(row["binary_predicted_bucket"])
+        if gold not in BINARY_ROUTE_BUCKETS or predicted not in BINARY_ROUTE_BUCKETS:
+            raise ValueError(f"invalid binary route row: gold={gold!r}, predicted={predicted!r}")
+        confusion[gold][predicted] += 1
+        case_id = str(row.get("case_id", ""))
+        visual_kind = str(row.get("visual_kind", ""))
+        if case_id and visual_kind in {"real", "fake"}:
+            pair_predictions[case_id][visual_kind] = predicted
+
+    support = sum(sum(values.values()) for values in confusion.values())
+    per_bucket: dict[str, dict[str, Any]] = {}
+    recalls: list[float] = []
+    correct = 0
+    for bucket in BINARY_ROUTE_BUCKETS:
+        total = sum(confusion[bucket].values())
+        true_positive = confusion[bucket][bucket]
+        predicted_total = sum(confusion[gold][bucket] for gold in BINARY_ROUTE_BUCKETS)
+        recall = true_positive / total if total else None
+        precision = true_positive / predicted_total if predicted_total else None
+        f1 = (
+            2.0 * precision * recall / (precision + recall)
+            if precision is not None and recall is not None and precision + recall > 0
+            else None
+        )
+        if recall is not None:
+            recalls.append(recall)
+        correct += true_positive
+        per_bucket[bucket] = {
+            "support": total,
+            "recall": recall,
+            "precision": precision,
+            "f1": f1,
+            "predictions": dict(confusion[bucket]),
+        }
+
+    complete_pairs = [
+        values for values in pair_predictions.values() if set(values) == {"real", "fake"}
+    ]
+    pair_consistency = (
+        sum(values["real"] == values["fake"] for values in complete_pairs) / len(complete_pairs)
+        if complete_pairs
+        else None
+    )
+    return {
+        "num_videos": support,
+        "accuracy": correct / support if support else None,
+        "balanced_accuracy": sum(recalls) / len(recalls) if recalls else None,
+        "per_bucket": per_bucket,
+        "predicted_counts": {
+            bucket: sum(confusion[gold][bucket] for gold in BINARY_ROUTE_BUCKETS)
+            for bucket in BINARY_ROUTE_BUCKETS
+        },
+        "real_fake_pair_route_consistency": pair_consistency,
+        "num_complete_real_fake_pairs": len(complete_pairs),
+    }
+
+
+def binary_authenticity_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    counts: dict[str, dict[str, int]] = {}
+    distributions: dict[str, dict[str, float]] = {}
+    for visual_kind in ("real", "fake"):
+        values = [
+            str(row["binary_predicted_bucket"])
+            for row in rows
+            if str(row.get("visual_kind", "")) == visual_kind
+        ]
+        counter = Counter(values)
+        counts[visual_kind] = {bucket: counter[bucket] for bucket in BINARY_ROUTE_BUCKETS}
+        distributions[visual_kind] = {
+            bucket: counter[bucket] / len(values) if values else 0.0
+            for bucket in BINARY_ROUTE_BUCKETS
+        }
+    total_variation = 0.5 * sum(
+        abs(distributions["real"][bucket] - distributions["fake"][bucket])
+        for bucket in BINARY_ROUTE_BUCKETS
+    )
+    return {
+        "route_counts_by_visual_kind": counts,
+        "route_distributions_by_visual_kind": distributions,
+        "real_fake_route_distribution_total_variation": total_variation,
+        "interpretation": (
+            "A large gap means the route itself correlates with local Real/Fake status. "
+            "It is a shortcut warning, not evidence of camera-conditioned detection."
+        ),
+    }
+
+
+def audit_binary_routes(args: argparse.Namespace) -> None:
+    source_rows = read_jsonl(args.input_manifest)
+    if not source_rows:
+        raise ValueError("binary route audit requires a non-empty three-class manifest")
+    video_ids = [str(row.get("video_id", "")) for row in source_rows]
+    if any(not video_id for video_id in video_ids) or len(set(video_ids)) != len(video_ids):
+        raise ValueError("three-class route manifest must have unique, non-empty video_id values")
+
+    rows: list[dict[str, Any]] = []
+    for source in source_rows:
+        gold_three = str(source.get("route_gold_bucket", ""))
+        predicted_three = str(source.get("predicted_bucket", ""))
+        if gold_three not in ROUTE_BUCKETS or predicted_three not in ROUTE_BUCKETS:
+            raise ValueError(
+                f"binary DataA audit needs three-class gold and predictions: {source.get('video_id')}"
+            )
+        row = copy.deepcopy(source)
+        row["binary_gold_bucket"] = binary_bucket(gold_three)
+        row["binary_predicted_bucket"] = binary_bucket(predicted_three)
+        row["binary_route_bucket"] = row["binary_predicted_bucket"]
+        row["binary_wrong_route_bucket"] = BINARY_WRONG_ROUTE[row["binary_predicted_bucket"]]
+        row["binary_mapping"] = "no-motion_vs_minor-plus-complex-motion"
+        rows.append(row)
+
+    metrics = binary_route_metrics(rows)
+    per_bucket_recalls = {
+        bucket: metrics["per_bucket"][bucket]["recall"] for bucket in BINARY_ROUTE_BUCKETS
+    }
+    coverage = len(rows) / len(source_rows)
+    pair_consistency = metrics["real_fake_pair_route_consistency"]
+    checks = {
+        "coverage": coverage >= args.min_coverage,
+        "accuracy": metrics["accuracy"] is not None and metrics["accuracy"] >= args.min_accuracy,
+        "balanced_accuracy": (
+            metrics["balanced_accuracy"] is not None
+            and metrics["balanced_accuracy"] >= args.min_balanced_accuracy
+        ),
+        "both_binary_routes_supported": all(
+            metrics["per_bucket"][bucket]["support"] > 0 for bucket in BINARY_ROUTE_BUCKETS
+        ),
+        "per_route_recall": all(
+            recall is not None and recall >= args.min_per_route_recall
+            for recall in per_bucket_recalls.values()
+        ),
+        "real_fake_pair_consistency": (
+            pair_consistency is not None and pair_consistency >= args.min_pair_consistency
+        ),
+    }
+
+    by_source_family: dict[str, Any] = {}
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row.get("source_family") or "unknown")].append(row)
+    for source_family, family_rows in sorted(grouped.items()):
+        by_source_family[source_family] = binary_route_metrics(family_rows)
+
+    passed = all(checks.values())
+    summary = {
+        "schema_version": "dataa_binary_camera_route_audit_v1",
+        "gate": "DataA 静止/有运动二路 Router 开发门",
+        "status": "passed" if passed else "failed",
+        "what_was_tested": (
+            "Without retraining or rescoring, the frozen three-class top-1 route is mapped to "
+            "no-motion versus motion=(minor-motion or complex-motion) on held-out DataA."
+        ),
+        "posthoc_method_development_revision": True,
+        "input_manifest": str(args.input_manifest),
+        "output_manifest": str(args.output_manifest),
+        "mapping": {
+            "no-motion": ["no-motion"],
+            "motion": ["minor-motion", "complex-motion"],
+            "wrong_route_control": "swap no-motion and motion",
+        },
+        "thresholds": {
+            "min_coverage": args.min_coverage,
+            "min_accuracy": args.min_accuracy,
+            "min_balanced_accuracy": args.min_balanced_accuracy,
+            "min_per_route_recall": args.min_per_route_recall,
+            "min_pair_consistency": args.min_pair_consistency,
+        },
+        "checks": checks,
+        "coverage": coverage,
+        "metrics": metrics,
+        "by_source_family": by_source_family,
+        "authenticity_route_audit": binary_authenticity_audit(rows),
+        "does_not_establish": (
+            "This development audit does not establish Real/Fake detection gains. The binary mapping "
+            "was motivated after inspecting the failed three-class DataA gate, so only the later frozen "
+            "ViF-Bench shared-versus-correct-route-versus-wrong-route comparison can validate transfer."
+        ),
+        "next_action": (
+            "If passed, build equal-data shared, no-motion, and motion detection branches and freeze the "
+            "binary mapping before ViF-Bench. If failed, stop the hard-routing family."
+        ),
+    }
+    write_jsonl(args.output_manifest, rows)
+    write_json(args.output_summary, summary)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 def authenticity_route_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
@@ -654,6 +856,17 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--min-top-probability", type=float, default=0.0)
     aggregate.add_argument("--min-margin", type=float, default=0.0)
     aggregate.set_defaults(handler=aggregate_routes)
+
+    binary = subparsers.add_parser("audit-binary")
+    binary.add_argument("--input-manifest", required=True)
+    binary.add_argument("--output-manifest", required=True)
+    binary.add_argument("--output-summary", required=True)
+    binary.add_argument("--min-coverage", type=float, default=1.0)
+    binary.add_argument("--min-accuracy", type=float, default=0.75)
+    binary.add_argument("--min-balanced-accuracy", type=float, default=0.75)
+    binary.add_argument("--min-per-route-recall", type=float, default=0.70)
+    binary.add_argument("--min-pair-consistency", type=float, default=0.90)
+    binary.set_defaults(handler=audit_binary_routes)
 
     compose = subparsers.add_parser("compose")
     compose.add_argument("--index-dir", required=True)
