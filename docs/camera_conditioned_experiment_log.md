@@ -24,7 +24,7 @@
 | 2026-07-13 | 有序抽帧二元相机辅助与检测回放联合训练三分支验证 | DataA 与 ViF-Bench 检测迁移均未通过；当前配方停止 | 在相同有序抽帧输入和检测回放下，正确二元相机监督是否比逐条翻转监督及仅检测对照学到视觉相关能力，同时保留检测接口 | ViF-Bench 上正确相机辅助 Balanced ACC 为 76.81%，低于仅检测续训的 77.18%、翻转控制的 77.22% 和原模型的 79.18%；独立相机 VQA 与检测回放交错 SFT 没有形成检测正迁移 |
 | 2026-07-15 | 正确相机二元前置强化学习与分阶段检测恢复 | 主实验计划撤回，保留为辅助消融 | 从已经通过视觉依赖门的正确相机联合 SFT 模型出发，短程 Camera-PPRL 是否能在无相机文本推理时改善 ViF-Bench；随后检测回放能否恢复检测且保留相机能力 | 相机-only 奖励没有直接包含 Real/Fake，也没有要求检测决策使用相机中间变量；在执行前撤回主实验地位，避免把优化器变化误当任务耦合 |
 | 2026-07-15 | 检测主导的相机中间变量联合 SFT/GRPO 三对照门 | 代码与本地真实数据 dry-run 通过，待服务器执行 | 在同一次生成中先预测相机运动再输出 Real/Fake，并让检测正确奖励主导整条 rollout，正确相机奖励是否优于等算力的仅检测奖励和打乱相机奖励 | 1024 条训练记录中 DataA/DataB 各 512、Real/Fake 各 512；打乱标签改变 99.22% 样本且保持 `source × Real/Fake` 标签边际；DataA 作局部诊断，ViF 的 Real/Fake 三对照是开发主门 |
-| 2026-07-15 | 三分类相机运动硬路由检测专家验证 | 代码与本地真实数据构建审计通过；先做 held-out 路由校准 | 在不向检测 prompt 提供相机文字时，按同一 16 帧预测的无运动/轻微运动/复杂运动选择 detection 专家，是否优于同数据共享模型和循环错误路由 | ViF 无 gold camera 标签，因此先用 held-out DataA 校准三分类与 real/fake 路由一致性；校准通过后才训练四个 detection LoRA |
+| 2026-07-15 | 三分类相机运动硬路由检测专家验证 | 完整实现与本地数据/测试审计通过；待服务器路由校准 | 在不向检测 prompt 提供相机文字时，按同一 16 帧预测的无运动/轻微运动/复杂运动选择 detection 专家，是否优于同数据共享模型、同协议原始模型和循环错误路由 | 先用 held-out DataA 校准路由；ViF 主实验完全使用检测器读取的同一 16 帧，不依赖覆盖不完整的原视频；只有路由门通过后才训练四个 detection LoRA |
 | 2026-07-13 | DataB 自动解释的 DeepfakeJudge-7B 可靠性门 | 代码已就绪，待服务器执行 | 专用开源深伪解释 Judge 在 DataB 上是否真正依据有序帧、bbox、时间和类别评价自动 CoT，而不是只评价语言流畅度 | 先做 200 条分层样本及视觉错配控制；通过后才进入人工校准和全量筛选 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
@@ -1785,13 +1785,26 @@ ViF-Bench 已在本项目中反复查看，只能作为开发 benchmark，不能
 
 在检测模型不接收 camera caption、camera label 或任何外部相机文本的前提下，先从检测模型实际读取的同一组有序帧预测 `no-motion / minor-motion / complex-motion`，再选择对应的 detection LoRA，检验相机运动条件化的专家分工是否能改善最终 `Real/Fake`，而不是继续用相机 VQA 指标代替检测指标。
 
+### 设计动机与可证伪假设
+
+前面的平衡二元相机问答已经证明 Qwen3-VL-8B 能从画面学习相机 primitive，但“正确相机 VQA 与 detection replay 交错 SFT”在 DataA 和 ViF-Bench 都没有超过仅检测与翻转相机控制。正确和翻转相机监督在检测端近似不可区分，说明把两个任务放进同一 SFT 数据流并不会自动建立相机能力到 `Real/Fake` 决策的连接。本实验因此不再要求单一 LoRA 自发完成隐式任务迁移，而是把相机条件显式用于选择检测决策边界。
+
+形式上，路由器先由相同有序帧得到 `r = g(x)`，检测输出为 `y = f_r(x)`。这轮实验包含三个相互补充的可证伪比较：
+
+- `预测路由 > 共享模型`：检验按相机运动进行条件化 specialization 是否比同数据的单一决策边界更有效。
+- `预测路由 > 循环错误路由`：检验收益是否依赖当前视频的正确路由语义，而不只是三个 LoRA 带来的额外参数量。循环错误路由复用相同专家预测，只改变专家选择。
+- `预测路由 > 同协议原始检测模型`：防止共享续训本身退化时，把“少退化”误写成方法提升。
+
+硬路由只是低成本机制门，不预设为最终论文架构。若该门通过，才有依据进一步实现单模型内部 soft gate 或 camera-conditioned residual adapter；若失败，则停止这个路由家族，不继续用相同数据配方追加 RL。
+
 ### 日期、状态和模型谱系
 
 - 日期：2026-07-15。
-- 状态：`代码与本地真实数据构建审计通过；先做 held-out DataA 三分类路由校准`。
+- 状态：`完整代码已提交，本地真实数据构建与项目回归测试通过；待服务器执行 held-out DataA 三分类路由校准`。当前没有服务器模型结果，不能标记为方法通过。
 - 检测起点：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
 - 路由模型：从同一检测起点训练独立三桶 router adapter，位置为 `/tmp/1res/camera_hard_route_gate/v1/train/router`。旧二元相机 adapter 的标签构建忽略了独立 `static` 标签，不能直接把其 `no-motion` 分数当成 `static/no-motion` 合并类；新 router 显式修复该标签契约并仍只使用有序抽帧，不使用原视频输入。
 - 检测分支：共享 detection LoRA、无相机运动专家、轻微运动专家、复杂运动专家，四者都从同一检测起点独立训练。
+- 代码版本：GitHub 分支 `codex/caspr-gate1`，提交 `1bf31cb`（`Add camera hard-routing validation gate`）。
 - 完整执行说明：`docs/camera_hard_route_gate_execution_20260715.md`。
 
 ### 训练与路由数据
@@ -1804,12 +1817,49 @@ ViF-Bench 已在本项目中反复查看，只能作为开发 benchmark，不能
 - `static`、`no_motion` 与 `no-camera-motion` 统一映射为 `no-motion`；若多标签同时含 coarse bucket，优先级固定为 `complex-motion > minor-motion > no-motion`；无可用 bucket 的训练 case 排除并审计，推理时可回退共享模型。
 - DataB 只取 detection frame path 能与 camera annotation path 对齐的记录，并在每个 route bucket 内分别平衡 Real/Fake。
 
+路由器训练只使用 DataA train cases 的 `real` 有序 16 帧。这样既不让局部生成伪影成为相机类别捷径，也不把同一 case 的 real/fake 重复算作两个独立相机训练样本。每个 case 分别构造“是否无运动”“是否轻微运动”“是否复杂运动”三个 Yes/No primitive；每道问题内部 Yes/No 等量，三道问题的记录数也严格相同。held-out DataA 则同时评测 real 与 fake 两套帧，用来检查局部编辑前后路由是否保持一致。
+
+LlamaFactory 中注册的数据名为：
+
+- `camera_hard_route_router`：三分类 router 的平衡二元训练记录。
+- `camera_hard_route_shared`：三个检测专家数据的精确并集。
+- `camera_hard_route_no_motion`、`camera_hard_route_minor_motion`、`camera_hard_route_complex_motion`：三个互斥专家数据。
+
+正式服务器构建要求 DataA 为 1080 cases。低于预期、train/test case 重叠、共享数据不是三个专家的精确并集、任一专家缺少 Real/Fake、检测 prompt 泄漏 camera 文本或图片路径缺失都会直接报错，不会静默跳过后继续训练。
+
 ### 单一改变因素和对照
 
 - 共享对照读取三个专家训练数据的精确不重叠并集；三个专家各只读取自己的 route bucket。每条训练记录只进入一个专家，因此三个专家合计的数据量等于共享对照的数据量。
 - 三个专家和共享对照都只训练原 detection 目标，prompt 中没有 camera 文本。相机信息只决定推理时选哪个 LoRA，不进入 detection prompt。
 - ViF-Bench 先对三个专家和共享模型各做一次完整预测，再离线构造三种条件：预测相机路由、循环错误路由、共享模型。正确与错误路由复用完全相同的逐模型预测，唯一变化是专家选择。
 - ViF-Bench route manifest 从 `test_index.rank*.json` 指向的同一 16 帧生成，并镜像既有 `ViFBench.py` 的 `timestamps.txt` 加 `1.png ... N.png` 顺序；不使用只覆盖部分样本的原视频，避免额外时序信息与原视频可用性造成不公平和选择偏差。
+
+最终实际比较四个条件：
+
+| 条件 | 训练/推理含义 | 用途 |
+|---|---|---|
+| 同协议原始检测模型 | 原始 checkpoint 使用本轮同一 ViF index、prompt 与解码设置重跑 | 绝对基线，消除旧提示词协议差异 |
+| 共享检测续训模型 | 单一 LoRA 读取三个专家数据的精确并集 | 等数据量、等优化样本控制 |
+| 预测相机路由 | router 从当前 16 帧预测桶并选择对应专家；低置信度回退共享模型 | 候选方法 |
+| 循环错误路由 | `no -> minor -> complex -> no`，低置信度样本仍按相同规则回退共享模型 | 相机路由语义因果控制 |
+
+三个专家合计看到的训练记录集合与共享模型完全相同，但硬路由拥有三个独立 LoRA，参数存储高于共享模型。因此仅仅超过共享模型仍可能来自容量或 specialization；必须同时超过错误路由，才能说明“为当前视频选择哪一个专家”具有信息价值。
+
+### 路由输入、打分与 manifest 契约
+
+- DataA 路由校准和 ViF 路由都使用与检测器相同的有序抽帧，不额外读取完整视频。ViF 默认 index 为 `eval/v4train-main/eval/test_index_splits/splits_16`，若部署目录采用上一层结构则自动兼容 `eval/v4train-main/test_index_splits/splits_16`。
+- ViF 每个 index frame directory 必须具有 `timestamps.txt` 和严格的 `1.png ... 16.png`。原始 mp4 缺失不影响实验；若检测所需的帧或时间戳缺失，构建阶段直接给出具体路径并失败，绝不只在“有原视频的子集”上报告结果。
+- 对每个视频分别计算三个问题首个答案 token 的 `Yes logit - No logit`。三路分数经过相对 softmax 得到 top-1 与 top-2 margin；这些值只用于相对路由与回退，不宣称是校准后的真实类别概率。
+- route manifest 保存 `video_id`、三路原始分数、相对分数、`predicted_bucket`、最终 `route_bucket`、`cyclic_route_bucket`、top probability、margin、是否回退共享模型及回退原因。
+- 低置信度阈值只允许在 held-out DataA 上根据 coverage、三分类性能和配对一致性确定一次，之后原样冻结用于 ViF-Bench。ViF 没有 gold camera 标签，禁止再根据 ViF 检测结果反向调路由阈值。
+
+### 完整实验流程
+
+1. **环境与数据审计**：`STAGE=preflight` 只检查模型、四个源数据、LlamaFactory、ViF index、依赖和 16 张 GPU；`STAGE=build` 构造 DataA split、router、共享/专家检测数据并注册 LlamaFactory；`STAGE=smoke` 验证两步训练链路。
+2. **路由能力门**：`STAGE=train_router` 训练三桶 router；`STAGE=calibrate_dataa_route` 在 held-out DataA real/fake 帧上计算三路 logits、路由混淆矩阵、每桶 recall、macro recall 与 pair consistency。只有该门通过才训练检测专家。
+3. **检测 specialization**：`STAGE=train_all` 依次训练共享 LoRA 和三个专家；也可用 `train_shared / train_no_motion / train_minor_motion / train_complex_motion` 在独立服务器运行。所有 detection 训练目标与原检测任务一致，不包含 camera caption、label 或 route token。
+4. **冻结路由并生成 ViF manifest**：`build_vif_route_inputs -> score_vif_route -> aggregate_vif_route`。使用 DataA 冻结的阈值，对 ViF index 中每一个检测样本生成路由；输出必须和 index 的 `video_id` 集合精确相等。
+5. **ViF 四模型推理与离线合成**：共享分支同时重跑原始 base 和共享 LoRA；三个专家各自推理一次。`compose_vif` 不再加载模型，只从四套完整预测离线组成共享、预测路由和循环错误路由，并输出严格门汇总与既有官方评测日志。
 
 ### 固定设置和验收标准
 
@@ -1820,11 +1870,37 @@ ViF-Bench 已在本项目中反复查看，只能作为开发 benchmark，不能
 - ViF-Bench 检测门：原始 base、共享模型、预测路由、错误路由的 coverage/格式均至少 99%；预测路由相对同协议原始 base 和共享模型分别在 Balanced ACC 或 Fake F1 至少提高 0.5 点且另一项下降不超过 0.5 点；预测路由相对循环错误路由至少提高 1.0 点且另一项下降不超过 0.5 点。原始 base 在同一次执行中重跑，不能混用旧 83.96 与当前严格协议 79.18。
 - ViF 路由摘要同时报告 Real/Fake 的 route distribution total variation 和配对 route 一致率。若路由本身高度相关于真假，必须作为 benchmark shortcut 风险报告，不能据此声称模型完成了 camera-aware artifact reasoning。
 
+检测主指标始终是宏平均 Balanced ACC 与 Fake F1；同时保留 Fake Recall、Real Recall、格式有效率、覆盖率和每个生成来源上的 Balanced ACC 胜率。相机三分类 accuracy、macro recall 和 pair consistency 只负责确认路由器可用，不能替代 `Real/Fake` 结果。
+
 ### 已完成的本地实现审计
 
 本地旧镜像 DataA 为 1076 cases，仅用于代码 dry-run，不替代服务器正式 1080-case 统计。构建器得到 702 条三桶 router 记录：三个问题各 234 条且各自 Yes/No 平衡，总体 Yes/No 各 351；共享 detection 记录 6414 条；无运动、轻微运动、复杂运动专家分别为 1272、1114、4028 条，各桶 Real/Fake 完全平衡；DataA train/test case 交集为 0；共享记录 ID 与三个专家的不重叠并集完全一致。DataB 中有 1027 条 frame path 未与 camera path 对齐并被排除；训练并未为覆盖率强行猜测相机标签。共享数据中存在 89 次源数据重复内容，代码分别记录内容哈希和源记录唯一 ID，避免把原数据重复误判为跨专家泄漏。
 
-上述是数据与实现审计，不是模型结果，结论标记为`结论不足`。
+实现已通过项目回归测试 `120 passed, 1 skipped`，同时通过 Python 编译、两个 shell 入口语法检查与 Git diff 审计。跳过项不属于本实验。上述仍只是数据、协议和实现审计，不是模型结果，结论标记为`结论不足`。
+
+### 结果文件与判定顺序
+
+第一阶段只需要读取：
+
+- 数据构建审计：`/tmp/1res/camera_hard_route_gate/v1/data/camera_hard_route_data_summary.json`。
+- DataA 路由门：`/tmp/1res/camera_hard_route_gate/v1/routes/dataa_route_summary.json`。
+
+进入完整 ViF 后读取：
+
+- ViF 输入覆盖审计：`/tmp/1res/camera_hard_route_gate/v1/routes/vifbench_route_input_summary.json`。
+- ViF 三分类 route manifest：`/tmp/1res/camera_hard_route_gate/v1/routes/vifbench_route_manifest.jsonl`。
+- ViF 路由分布摘要：`/tmp/1res/camera_hard_route_gate/v1/routes/vifbench_route_summary.json`。
+- 最终四条件门：`/tmp/1res/camera_hard_route_gate/v1/vifbench/composed/camera_hard_route_gate.json`。
+
+判定顺序固定为：先检查工程 coverage/格式，再检查 DataA 路由门；ViF 阶段先检查路由 manifest 是否覆盖完整 index 和是否存在明显真假 route shortcut，最后才读取 `Real/Fake` 四条件差值。不能因为某个生成器单独提升而忽略宏平均未过门，也不能用相机分类指标挽救检测失败。
+
+### 泄漏、分布差异和结论边界
+
+- 起点 checkpoint 已经见过 DataB，因此 DataB 只能作为检测 replay；任何 DataB 训练内评测都不能证明泛化。
+- DataA fake 是 VACE 局部编辑，DataB 与 ViF fake 主要是全生成。DataA 路由门验证的是相机分类与局部编辑不变性，不能证明通用 AIGC 检测提升；通用开发结论必须来自 ViF 的 `Real/Fake` 对照。
+- DataB camera 标签来自 CameraBench 模型而非人工 gold，可能包含噪声和来源偏差。循环错误路由与每生成器胜率用于检查正确路由语义是否真的产生增量，但不能完全消除伪标签偏差。
+- ViF-Bench 已被反复用于开发，只能作为方法筛选集。方法冻结后还需要在零重叠审计通过的 GenBuster-200K `benchmark` 集和可用的 MintVid 上评测，才能作为论文外部泛化证据。
+- 硬路由增加 router 推理和三个 LoRA 的存储，不是最终效率最优结构。通过只建立“相机条件化决策边界存在有用信号”；不自动证明相机运动导致伪影，也不证明自由文本解释质量提高。
 
 ### 存储与立即下一步
 
@@ -1833,6 +1909,8 @@ ViF-Bench 已在本项目中反复查看，只能作为开发 benchmark，不能
 - DataA 路由门通过后先单独上传将被 ViF manifest 复用的 router；只有 ViF 硬路由门通过后，再把完整 `train/` 下的四个 detection adapter 上传到 `oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/camera_hard_route_gate/v1/train/`。
 
 立即下一步：服务器执行 `STAGE=preflight`、`STAGE=build`、`STAGE=smoke`、`STAGE=train_router` 和 `STAGE=calibrate_dataa_route`，先提供 `dataa_route_summary.json`。达到前置门后再投入四分支检测训练和完整 ViF-Bench；未达到则分析 confusion，不用 CameraBench 原视频子集挽救主路由，也不启动同方向 RL。
+
+完整阶段命令与代码文件清单以 `docs/camera_hard_route_gate_execution_20260715.md` 为准。当前代码入口为 `scripts/camera_hard_route_gate/run.sh`，数据构建器为 `tools/build_camera_hard_route_gate.py`，ViF 路由/预测合成为 `scripts/camera_hard_route_gate/route_manifest.py`，独立专家 ViF 推理复用并扩展 `scripts/camera_detection_retention/run_vifbench.sh`。
 
 ## 记录维护说明
 
