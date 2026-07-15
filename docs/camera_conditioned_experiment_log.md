@@ -25,7 +25,8 @@
 | 2026-07-15 | 正确相机二元前置强化学习与分阶段检测恢复 | 主实验计划撤回，保留为辅助消融 | 从已经通过视觉依赖门的正确相机联合 SFT 模型出发，短程 Camera-PPRL 是否能在无相机文本推理时改善 ViF-Bench；随后检测回放能否恢复检测且保留相机能力 | 相机-only 奖励没有直接包含 Real/Fake，也没有要求检测决策使用相机中间变量；在执行前撤回主实验地位，避免把优化器变化误当任务耦合 |
 | 2026-07-15 | 检测主导的相机中间变量联合 SFT/GRPO 三对照门 | 代码与本地真实数据 dry-run 通过，待服务器执行 | 在同一次生成中先预测相机运动再输出 Real/Fake，并让检测正确奖励主导整条 rollout，正确相机奖励是否优于等算力的仅检测奖励和打乱相机奖励 | 1024 条训练记录中 DataA/DataB 各 512、Real/Fake 各 512；打乱标签改变 99.22% 样本且保持 `source × Real/Fake` 标签边际；DataA 作局部诊断，ViF 的 Real/Fake 三对照是开发主门 |
 | 2026-07-15 | 三分类相机运动硬路由检测专家验证 | 未通过；停止三专家训练 | 在不向检测 prompt 提供相机文字时，按同一 16 帧预测的无运动/轻微运动/复杂运动选择 detection 专家，是否优于同数据共享模型、同协议原始模型和循环错误路由 | held-out DataA 总体 ACC 73.46%、macro recall 58.64%、pair consistency 92.59%，但轻微运动 recall 仅 4.90%，未达到每桶至少 40% 的预设门槛；三分类中间桶塌缩，不能进入四分支检测训练 |
-| 2026-07-15 | 静止/有运动二路硬路由复核 | 代码与测试通过，待服务器执行 | 不重新训练或推理，把冻结三分类 top-1 固定映射为静止与有运动，检验塌缩是否来自不合理的中间硬类别 | 这是看过三分类开发门后的方法修订，只能作为 DataA 开发门；预先固定两类 recall、Balanced ACC 与 pair consistency 门槛，通过后才允许构造二专家检测对照 |
+| 2026-07-15 | 静止/有运动二路硬路由复核 | 通过 | 不重新训练或推理，把冻结三分类 top-1 固定映射为静止与有运动，检验塌缩是否来自不合理的中间硬类别 | ACC 83.80%、Balanced ACC 83.96%，静止/有运动 recall 分别为 84.21%/83.71%，pair consistency 95.37%；三个 VACE 来源均稳定，real/fake 路由分布 TV 仅 0.31%，允许进入二专家检测门 |
+| 2026-07-15 | 二路相机硬路由检测专家门 | 代码与测试通过，待服务器构建和训练 | 冻结视觉 Router 后，静止/有运动检测专家是否在无 camera 文本的 ViF-Bench 上优于同数据共享模型、原始模型和交换错误路由 | 共享数据必须等于两个专家的不重叠并集；最终只看 Real/Fake Balanced ACC/Fake F1，正确路由还必须显著超过交换错误路由才能建立任务耦合 |
 | 2026-07-13 | DataB 自动解释的 DeepfakeJudge-7B 可靠性门 | 代码已就绪，待服务器执行 | 专用开源深伪解释 Judge 在 DataB 上是否真正依据有序帧、bbox、时间和类别评价自动 CoT，而不是只评价语言流畅度 | 先做 200 条分层样本及视觉错配控制；通过后才进入人工校准和全量筛选 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
@@ -1946,7 +1947,7 @@ LlamaFactory 中注册的数据名为：
 ### 日期、状态、输入和单一改变因素
 
 - 日期：2026-07-15。
-- 状态：`代码与项目测试通过，待服务器执行秒级 manifest 审计`。
+- 状态：`通过，允许进入二专家 Real/Fake 检测门`。
 - Router 谱系：原 DataB detection checkpoint `checkpoint-2115` 上训练的三分类 Router adapter；本实验不更新任何参数。
 - 输入：`/tmp/1res/camera_hard_route_gate/v1/routes/dataa_route_manifest.jsonl`，即已经完成的 held-out DataA 三分类逐视频结果。
 - 输出：`/tmp/1res/camera_hard_route_gate/v1/routes/dataa_binary_route_manifest.jsonl` 与 `dataa_binary_route_summary.json`；脚本同时复制到 NAS 的 `res/camera_hard_route_gate/v1/routes/`。
@@ -1965,11 +1966,64 @@ LlamaFactory 中注册的数据名为：
 
 结果还必须报告每个 VACE source family 的指标和 real/fake 路由分布差异，但不根据来源子集反复改变映射或门槛。通过只说明二路条件变量可用，不说明 `Real/Fake` 检测有提升；真正的任务耦合仍须由后续等数据共享模型、正确二路专家和交换错误路由在 ViF-Bench 上的检测差值证明。
 
+### 服务器结果（2026-07-15）
+
+结果来源：`/tmp/1res/camera_hard_route_gate/v1/routes/dataa_binary_route_summary.json`。所有预设检查均通过。
+
+| 指标 | 结果 | 门槛 |
+|---|---:|---:|
+| coverage | 100.00% | 100% |
+| accuracy | 83.80% | 至少 75% |
+| Balanced ACC | 83.96% | 至少 75% |
+| `no-motion` recall | 84.21% | 至少 70% |
+| `motion` recall | 83.71% | 至少 70% |
+| real/fake pair consistency | 95.37% | 至少 90% |
+
+三个来源的 Balanced ACC 分别为：VACE-1.3B dataset 82.80%、VACE-1.3B textedit 86.55%、VACE-14B 86.06%；对应 pair consistency 为 95.33%、98.00%、93.33%，没有单一来源独占总体收益。real 与 fake 的预测路由分别为 91/233 和 92/232（静止/有运动），分布 total variation 仅 0.31%，未见 Router 直接利用局部真假差异的明显捷径。
+
+该门标记为`通过`，但仍不是检测结果。静止类 precision 只有 52.46%，说明二路 Router 并非高精度相机 benchmark 模型；允许继续的依据是两类 recall、来源稳定性、配对一致性和真假分布控制共同过门。后续必须依靠正确路由相对共享模型与交换错误路由的 `Real/Fake` 增量判断任务是否真正耦合。
+
 ### 偏差与结论边界
 
 该二路定义是在查看同一 DataA 三分类开发门后提出的，属于明确记录的事后方法修订，不是独立测试结果。DataA 继续只作开发与机制诊断；若本门通过，二路映射必须立即冻结，禁止再根据 ViF-Bench 检测标签调整。若本门失败，停止硬路由家族；若通过，只进入“共享模型 + 静止专家 + 有运动专家”的等数据检测门，不追认三分类实验成功。
 
-立即下一步：服务器覆盖更新后的 `scripts/camera_hard_route_gate/route_manifest.py` 与 `run.sh`，执行 `STAGE=audit_dataa_binary_route bash "$RUN"`，只回传 `dataa_binary_route_summary.json`。本步骤输出均为小型正式元数据，不需要 OSS；现有 Router adapter 在二路门判定前先保留在 `/tmp`。
+立即下一步：二路映射已经冻结，不再根据 ViF 标签修改。进入下一节的等数据共享模型、静止专家和有运动专家训练；现有 Router adapter 必须保留并用于 ViF route manifest。
+
+## 22. 二路相机硬路由检测专家门
+
+### 这个实验测什么
+
+冻结已经通过 DataA 开发门的视觉 Router，训练一个读取全部检测记录的共享 LoRA、一个只读 `no-motion` 记录的静止专家和一个读取 `minor-motion + complex-motion` 记录的有运动专家。ViF-Bench 推理时不提供 camera caption、camera label 或 route token；Router 与检测器读取同一组有序 16 帧，Router 只负责选择专家。
+
+### 日期、状态和模型谱系
+
+- 日期：2026-07-15。
+- 状态：`完整构建、训练、ViF 路由、专家推理与离线合成代码已实现并通过本地测试；待服务器执行`。
+- 三个 detection 分支均从 `/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115` 独立开始，不从相机 VQA 或其他 detection LoRA 串行续训。
+- Router 固定为 `/tmp/1res/camera_hard_route_gate/v1/train/router`，不再更新参数；二路映射固定为 `no-motion` 对 `motion = minor-motion + complex-motion`。
+- 新实验工作目录：`/tmp/1res/camera_binary_route_gate/v1`；持久化小结果目录：`/input/workflow_58770161/workspace/test/cameramotion_det/res/camera_binary_route_gate/v1`。
+
+### 数据和等算力契约
+
+- 输入检测数据来自已经审计的 `camera_hard_route_gate/v1/data/hard_route_*.json`，不重新划分 DataA，不改变 DataB 选择规则。
+- `camera_binary_route_no_motion` 只含原 `no-motion` 检测记录。
+- `camera_binary_route_motion` 是原 `minor-motion` 与 `complex-motion` 两个互斥专家记录的精确并集。
+- `camera_binary_route_shared` 必须是上述两个专家的不重叠精确并集；两个专家合计看到的 record ID、样本数和 epoch 数与共享模型完全相同。
+- 每个分支内部必须同时含 Real/Fake 且数量相等，检测 prompt 不得出现 camera 文本。实际服务器记录数以 `camera_binary_route_data_summary.json` 为准，不根据本地旧镜像猜测。
+
+三个 LoRA 使用同一设置：rank 16、alpha 32、dropout 0.05、学习率 `5e-5`、2 epochs，冻结视觉塔与多模态 projector，16 张 96G GPU。共享与专家拥有不同参数量，因此“正确路由超过共享”仍可能受 specialization/容量影响；交换错误路由复用完全相同的两套专家预测，只交换专家选择，是判断相机路由语义是否真正有用的关键控制。
+
+### ViF-Bench 条件和验收标准
+
+四个最终条件为：同协议原始 detection checkpoint、等数据共享 LoRA、冻结 Router 选择的正确二路专家、两路互换的错误 Router。四者使用同一 ViF index、检测 prompt、帧和解码协议，camera 文本不进入检测模型。
+
+预设门槛：四个条件 coverage 与格式有效率均至少 99%；正确路由相对原始模型和共享模型，Balanced ACC 或 Fake F1 至少提高 0.5 点且另一项下降不超过 0.5 点；正确路由相对交换错误路由至少提高 1.0 点且另一项下降不超过 0.5 点。还要报告每个生成器的 Balanced ACC 胜率和 ViF real/fake 路由分布差异。只有同时超过共享、原始和错误路由才标记为`通过`。
+
+### 分布差异、存储和结论边界
+
+DataA 是局部 VACE 编辑，DataB/ViF 主要是完整生成；DataA 二路门只证明 Router 可用，不能保证 detection specialization 外推。ViF 已反复作为开发 benchmark，二路检测门通过后还必须冻结方法并在零重叠 GenBuster `benchmark` 上评测。训练 adapter、合并模型和逐样本预测放 `/tmp`；小型数据审计、route manifest 和评测摘要复制到 NAS。三个正式 adapter 训练完成且准备进入 ViF 时，应在容器退出前上传 OSS。
+
+立即下一步：服务器依次运行新入口 `scripts/camera_binary_route_gate/run.sh` 的 `preflight`、`build`、`smoke`，核对数据并集审计后再运行 `train_all`。训练完成后冻结三个 adapter，再执行 ViF route 与四条件检测门；不得回到三分类专家或根据 ViF 标签修改二路映射。
 
 ## 记录维护说明
 
