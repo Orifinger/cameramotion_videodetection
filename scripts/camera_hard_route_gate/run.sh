@@ -161,7 +161,7 @@ build_data() {
   if [[ "${CHECK_IMAGES}" == "1" ]]; then
     image_args+=(--check-images)
   fi
-  "${PYTHON_BIN}" tools/build_camera_hard_route_gate.py \
+  "${PYTHON_BIN}" -m tools.build_camera_hard_route_gate \
     --dataa-detection-json "${DATAA_DETECTION_JSON}" \
     --dataa-camera-jsonl "${DATAA_CAMERA_JSONL}" \
     --datab-detection-json "${DATAB_DETECTION_JSON}" \
@@ -171,7 +171,7 @@ build_data() {
     --expected-dataa-cases 1080 \
     --seed 20260715 \
     "${image_args[@]}"
-  "${PYTHON_BIN}" tools/install_camera_hard_route_gate.py \
+  "${PYTHON_BIN}" -m tools.install_camera_hard_route_gate \
     --source-dir "${DATA_DIR}" \
     --llamafactory-data-dir "${LLAMAFACTORY_DATA_DIR}" \
     --smoke-samples 96 \

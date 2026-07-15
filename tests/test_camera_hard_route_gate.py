@@ -1,5 +1,7 @@
 import argparse
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +15,9 @@ from scripts.camera_hard_route_gate.route_manifest import (
 from tools.build_camera_hard_route_gate import balanced_router_training_records, route_bucket
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def write_json(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -24,6 +29,17 @@ def write_jsonl(path: Path, rows) -> None:
 
 
 class CameraRouteBucketTest(unittest.TestCase):
+    def test_builder_module_entrypoint_resolves_project_tools_package(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "tools.build_camera_hard_route_gate", "--help"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--dataa-detection-json", result.stdout)
+
     def test_priority_and_static_alias(self) -> None:
         self.assertEqual(route_bucket(["static"]), "no-motion")
         self.assertEqual(route_bucket(["no_motion"]), "no-motion")
