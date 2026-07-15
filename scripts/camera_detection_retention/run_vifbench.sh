@@ -207,6 +207,13 @@ run_inference_pair() {
   fi
 }
 
+run_camera_inference_only() {
+  require_dir "${MERGED_MODEL_DIR}"
+  echo "Running only the merged adapter model; no base prediction or evaluation is required."
+  infer_one "${MERGED_MODEL_DIR}" "${CAMERA_MODEL_NAME}" "${CAMERA_PRED_DIR}" \
+    "${INFERENCE_ROOT}/camera_adapter/inference.log"
+}
+
 evaluate_all() {
   mkdir -p "${EVAL_ROOT}" "${COMBINED_DIR}"
   "${PYTHON_BIN}" -m scripts.camera_detection_retention.vifbench_retention evaluate \
@@ -281,6 +288,9 @@ case "${STAGE}" in
   infer)
     run_inference_pair
     ;;
+  infer_adapter)
+    run_camera_inference_only
+    ;;
   eval)
     evaluate_all
     ;;
@@ -294,8 +304,15 @@ case "${STAGE}" in
     evaluate_all
     launch_keepalive
     ;;
+  adapter_only)
+    preflight
+    merge_camera_adapter
+    run_camera_inference_only
+    persist_small_results
+    launch_keepalive
+    ;;
   *)
-    echo "STAGE must be preflight, merge, infer, eval, eval_base, or all" >&2
+    echo "STAGE must be preflight, merge, infer, infer_adapter, eval, eval_base, adapter_only, or all" >&2
     exit 2
     ;;
 esac
