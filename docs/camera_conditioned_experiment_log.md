@@ -2162,7 +2162,7 @@ ViF-Bench 共 3160 条，其中 Router 判为静止 2439 条、判为有运动 7
 
 - 完整参数 SFT，只训练语言模型；冻结视觉塔和多模态投影层。
 - 16 GPU，每卡 batch size 1，gradient accumulation 1。
-- 5 epoch，学习率 `5e-6`，cosine scheduler，warmup ratio 0.1，bf16。
+- 5 epoch，学习率 `1e-5`，cosine scheduler，warmup ratio 0.1，bf16；每 500 step 保存，只保存模型权重，允许覆盖已有输出目录。
 - `cutoff_len=49152`、`image_max_pixels=262144`、`packing=false`，其余设置复现原始 `dataB.yaml`。
 - 两个分支必须使用相同基础模型文件、LlamaFactory 版本和训练配置；只允许 dataset name 与 output directory 不同。
 

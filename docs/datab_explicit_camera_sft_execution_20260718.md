@@ -75,7 +75,7 @@ KEEP_ALIVE_AFTER_RUN=1 STAGE=train_both bash scripts/datab_explicit_camera_sft/r
 /tmp/1res/datab_explicit_camera_sft/v1/train/with_camera
 ```
 
-两者均为 full SFT：5 epoch、学习率 `5e-6`、16 GPU、每卡 batch size 1、梯度累积 1、cosine scheduler、warmup 0.1，冻结视觉塔与多模态投影层，训练语言模型。
+两者均为 full SFT：5 epoch、学习率 `1e-5`、16 GPU、每卡 batch size 1、梯度累积 1、cosine scheduler、warmup 0.1，冻结视觉塔与多模态投影层，训练语言模型；每 500 step 保存一次，只保存模型权重，并允许覆盖已有输出目录。
 
 ## 存储
 

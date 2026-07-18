@@ -187,7 +187,7 @@ render_config() {
   if [[ "${mode}" == "smoke" ]]; then
     sed -i \
       -e 's|num_train_epochs: 5.0|max_steps: 2|' \
-      -e 's|save_strategy: epoch|save_strategy: "no"|' \
+      -e 's|save_steps: 500|save_strategy: "no"|' \
       -e 's|overwrite_output_dir: false|overwrite_output_dir: true|' \
       "${destination}"
   fi
