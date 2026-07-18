@@ -28,6 +28,7 @@
 | 2026-07-15 | 静止/有运动二路硬路由复核 | 通过 | 不重新训练或推理，把冻结三分类 top-1 固定映射为静止与有运动，检验塌缩是否来自不合理的中间硬类别 | ACC 83.80%、Balanced ACC 83.96%，静止/有运动 recall 分别为 84.21%/83.71%，pair consistency 95.37%；三个 VACE 来源均稳定，real/fake 路由分布 TV 仅 0.31%，允许进入二专家检测门 |
 | 2026-07-15 | 二路相机硬路由检测专家门 | 未通过；停止硬路由主线 | 冻结视觉 Router 后，静止/有运动检测专家是否在无 camera 文本的 ViF-Bench 上优于同数据共享模型、原始模型和交换错误路由 | 正确路由 Balanced ACC 74.50%，低于原始模型 79.18%、共享模型 76.30% 和交换错误路由 78.03%；19 个生成器中仅 1 个胜出，全部预注册检测门失败 |
 | 2026-07-17 | 二路检测专家交叉离线诊断 | 诊断完成；确认专家语义反转 | 在不训练和不重新推理的情况下，分别比较两个专家在静止/有运动路由子集上的表现，定位错误路由胜出的原因 | 静止子集上有运动专家 Balanced ACC 高 4.23 点，有运动子集上静止专家高 3.56 点；对应生成器胜负为 18/19 和 16/19，说明相机分桶形成了反向而非预期的检测专门化 |
+| 2026-07-18 | DataB 显式 Camera labels+caption 配对检测 SFT | 已确定执行；数据与训练代码通过本地真实数据审计，待服务器训练 | 从同一 Qwen3-VL-8B-Instruct 出发，在完全相同的 5739 条 DataB 上训练 5 epoch，唯一改变是 user prompt 是否追加匹配的 CameraBench labels+caption，检验显式相机条件能否提高 ViF-Bench 最终 Real/Fake 指标 | 本地确认原 6766 行中 5739 行具有完整 camera sidecar，Fake/Real 为 2866/2873；两分支 system、assistant、images 和其他字段逐条一致。ViF camera sidecar 正在生成，当前尚无检测结果 |
 | 2026-07-13 | DataB 自动解释的 DeepfakeJudge-7B 可靠性门 | 代码已就绪，待服务器执行 | 专用开源深伪解释 Judge 在 DataB 上是否真正依据有序帧、bbox、时间和类别评价自动 CoT，而不是只评价语言流畅度 | 先做 200 条分层样本及视觉错配控制；通过后才进入人工校准和全量筛选 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
@@ -2121,6 +2122,76 @@ ViF-Bench 共 3160 条，其中 Router 判为静止 2439 条、判为有运动 7
 该诊断直接使用已经查看过的 ViF 标签和预测，只能解释失败，不能用于选择新路由、交换专家名称或把错误控制改造成候选方法。无论输出哪种模式，前一节硬路由检测门都保持`未通过`。诊断完成后再决定下一条 camera 耦合路线，当前不启动新训练。
 
 立即下一步：停止静止/有运动硬路由、专家改名、阈值搜索和同方向 RL。若只为补全失败机制，可在 held-out DataA 上让两位专家做同样的交叉评测，以区分“训练域内已经反转”和“只在 ViF 跨域后反转”；该诊断不影响主线决策。论文方法主线应回到共享检测模型，并让 camera 变量在同一条训练样本和同一个 `Real/Fake` 损失中直接改变证据聚合或检测决策，而不是继续把数据按全局相机类别拆成互不共享的专家。
+
+## 24. DataB 显式 Camera labels+caption 配对检测 SFT
+
+### 这个实验测什么
+
+直接检验显式提供相机信息能否改善最终 AIGC 视频检测：两个模型都从同一个 Qwen3-VL-8B-Instruct 出发，只在同一批 DataB 上训练相同的 5 epoch。无 Camera 分支保留原 user prompt；Camera 分支仅在原 user prompt 末尾追加当前视频的 CameraBench `labels + caption`。system prompt、assistant 检测 CoT、`<answer>`、images 和所有其他字段均不改变。
+
+本实验不测试路由、Camera VQA、DataA、RL 或缺失相机鲁棒性。主结果只比较两个训练后模型在 ViF-Bench 对应推理条件下的 Real/Fake 检测指标。
+
+### 日期、状态和模型谱系
+
+- 日期：2026-07-18。
+- 状态：`已确定执行；数据构建、LlamaFactory 注册与训练代码通过本地真实 DataB 审计，待服务器训练`。
+- 两个分支共同起点：`/home/admin/Qwen3-VL-8B-Instruct`。
+- 不使用旧 DataB detection checkpoint 作为训练起点。
+- 无 Camera 分支输出：`/tmp/1res/datab_explicit_camera_sft/v1/train/no_camera`。
+- Camera 分支输出：`/tmp/1res/datab_explicit_camera_sft/v1/train/with_camera`。
+
+### 训练数据与唯一改变因素
+
+- DataB detection：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/detection/v4vif_2766busterall_trainall.json`。
+- DataB camera：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/datab_cameramotion_labels_final/datab_cameramotion_labels_v2.jsonl`。
+- 原 detection 共 6766 行、6666 个唯一 frame directory；camera sidecar 共 5639 行且 path 唯一。
+- 映射后保留 5739 行，对应 5639 个唯一 camera path；其余 1027 行从两个分支同时排除。
+- 保留原始顺序及 100 条同视频不同检测解释记录。5739 条中 Fake 2866、Real 2873。
+- 无 Camera 数据是这 5739 条源记录的原样深拷贝；Camera 数据只追加以下 block，不加入额外使用说明：
+
+```text
+<camera_motion>
+<labels>label-1; label-2; ...</labels>
+<caption>CameraBench caption</caption>
+</camera_motion>
+```
+
+- 本地真实数据构建审计确认：两个分支均为 5739 行，逐条 system、assistant、images 与其他字段相等；无 Camera 分支不含 camera block，Camera 分支每条恰好包含一个完整 block。
+
+### 训练设置
+
+- 完整参数 SFT，只训练语言模型；冻结视觉塔和多模态投影层。
+- 16 GPU，每卡 batch size 1，gradient accumulation 1。
+- 5 epoch，学习率 `5e-6`，cosine scheduler，warmup ratio 0.1，bf16。
+- `cutoff_len=49152`、`image_max_pixels=262144`、`packing=false`，其余设置复现原始 `dataB.yaml`。
+- 两个分支必须使用相同基础模型文件、LlamaFactory 版本和训练配置；只允许 dataset name 与 output directory 不同。
+
+### ViF-Bench 评测定义
+
+- 无 Camera 模型继续使用原 ViF-Bench detection system/user prompt，不追加相机信息。
+- Camera 模型在完全相同的 detection user prompt 末尾追加由冻结 CameraBench 模型为该 ViF 视频预测的 `labels + caption`，格式必须与训练一致。
+- ViF camera sidecar 当前正在生成，路径、覆盖数与哈希均为`待补充`；由于不是人工标注，记录中必须称为 predicted camera，不能称为 gold camera。
+- 主比较只读取两模型的 ViF-Bench ACC、Real/Fake recall、Fake F1 及逐生成器结果；不把 CameraBench 自身相机指标作为方法成功证据。
+
+### 验收、偏差与结论边界
+
+- 工程有效性：两个训练集必须各 5739 行，推理覆盖与输出格式必须一致且至少 99%。
+- 方法判定：Camera 分支应在相同 ViF 协议下稳定超过无 Camera 分支的核心 Real/Fake 指标；具体检测差值和是否进入独立 GenBuster `benchmark` 在结果到达后记录，不预填结果。
+- DataB camera 和 ViF camera 都来自 CameraBench 模型而非人工 gold，因此本实验验证的是“外部预测的显式相机上下文是否有用”，不证明 Qwen3-VL 检测器自行学会相机估计。
+- Camera caption 可能包含场景内容，因此若结果提升，只能先归因于完整 CameraBench labels+caption 条件；后续是否增加 labels-only 消融由主结果决定。本轮不提前扩展分支。
+- ViF-Bench 已被多次用于开发，只能作为当前路线筛选集；若通过，方法冻结后仍需在零重叠的 GenBuster `benchmark` 上确认外部泛化。
+
+### 代码、存储与立即下一步
+
+- 数据构建：`tools/build_datab_explicit_camera_sft.py`。
+- LlamaFactory 注册：`tools/install_datab_explicit_camera_sft.py`。
+- 训练入口：`scripts/datab_explicit_camera_sft/run.sh`。
+- 配置模板：`configs/datab_explicit_camera_sft/train_template.yaml`。
+- 执行说明：`docs/datab_explicit_camera_sft_execution_20260718.md`。
+- 可重建训练 JSON 与 full-SFT 模型放 `/tmp/1res/datab_explicit_camera_sft/v1`；小型摘要、manifest 和最终 YAML 持久化到 NAS `res/datab_explicit_camera_sft/v1`。
+- 两个 full-SFT 输出为正式可复用大文件，训练完成后应在容器退出前上传执行说明中给出的 OSS 目录。
+
+立即下一步：服务器依次执行 `preflight`、`build`、`smoke`；确认 5739 条严格配对审计后，可在两台服务器分别训练无 Camera 与显式 Camera 分支。ViF sidecar 完成后再补对应推理代码，不在其路径和 schema 未确认前猜测接口。
 
 ## 记录维护说明
 
