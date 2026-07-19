@@ -113,19 +113,33 @@ def _flow_correspondences(
 def _fit_fundamental(source: np.ndarray, target: np.ndarray, *, threshold: float) -> tuple[np.ndarray | None, dict[str, float]]:
     if source.shape[0] < 16:
         return None, {"valid": 0.0, "inlier_rate": 0.0, "median_error": float("nan")}
-    method = getattr(cv2, "USAC_MAGSAC", cv2.FM_RANSAC)
-    try:
-        matrix, mask = cv2.findFundamentalMat(
-            source,
-            target,
-            method,
-            threshold,
-            0.999,
-            10000,
-        )
-    except TypeError:
-        matrix, mask = cv2.findFundamentalMat(source, target, method, threshold, 0.999)
-    if matrix is None or np.asarray(matrix).shape != (3, 3) or not np.isfinite(matrix).all():
+
+    def estimate(method: int) -> tuple[np.ndarray | None, np.ndarray | None]:
+        try:
+            return cv2.findFundamentalMat(
+                source,
+                target,
+                method,
+                threshold,
+                0.999,
+                10000,
+            )
+        except TypeError:
+            try:
+                return cv2.findFundamentalMat(source, target, method, threshold, 0.999)
+            except cv2.error:
+                return None, None
+        except cv2.error:
+            return None, None
+
+    def valid(matrix: np.ndarray | None) -> bool:
+        return matrix is not None and np.asarray(matrix).shape == (3, 3) and np.isfinite(matrix).all()
+
+    preferred = int(getattr(cv2, "USAC_MAGSAC", cv2.FM_RANSAC))
+    matrix, mask = estimate(preferred)
+    if not valid(matrix) and preferred != int(cv2.FM_RANSAC):
+        matrix, mask = estimate(int(cv2.FM_RANSAC))
+    if not valid(matrix):
         return None, {"valid": 0.0, "inlier_rate": 0.0, "median_error": float("nan")}
     matrix = np.asarray(matrix, dtype=np.float64)
     errors = sampson_errors(source, target, matrix)
