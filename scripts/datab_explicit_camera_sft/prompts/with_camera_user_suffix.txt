@@ -1,0 +1,1 @@
+\n\nPlease analyze the following video frames, determine if the video is real or fake, and provide your reasoning.\n\n<camera_motion>\n<labels>{camera_labels}</labels>\n<caption>{camera_caption}</caption>\n</camera_motion>

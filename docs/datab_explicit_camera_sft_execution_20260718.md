@@ -91,4 +91,45 @@ ossutil64 cp -r /tmp/1res/datab_explicit_camera_sft/v1/train/no_camera/ oss://an
 ossutil64 cp -r /tmp/1res/datab_explicit_camera_sft/v1/train/with_camera/ oss://antsys-tamper/public/wong/skyra/selfcot/camerabench/ourexp/datab_explicit_camera_sft/v1/train/with_camera/
 ```
 
-ViF-Bench 的 labels+caption sidecar 生成完成后，再增加严格对应的两分支推理入口；本阶段不提前假设其文件路径或覆盖数。
+## ViF-Bench 配对推理
+
+推理使用 `scripts/datab_explicit_camera_sft/run_vifbench.sh`。无 Camera 分支保持原检测提示词；Camera 分支只在相同 user prompt 后追加训练时的四行 `<camera_motion>` block，不使用旧 `gold_camera` 文件中的标题或额外使用说明。ViF 相机信息是冻结 CameraBench 模型的预测，不称为 gold。
+
+脚本默认读取已经确认与 DataB sidecar 同 schema 的文件：
+
+`/input/workflow_58770161/workspace/test/camb/camerabench_outputs/vifbench_cameramotion_labels_v2/datab_cameramotion_labels_v2.jsonl`
+
+先只做快速预检：
+
+```bash
+cd /input/workflow_58770161/workspace/test/cameramotion_det
+RUN=scripts/datab_explicit_camera_sft/run_vifbench.sh
+STAGE=preflight bash "$RUN"
+```
+
+预检会检查 system prompt 与 DataB 训练逐字一致、两个 user suffix 只差训练时追加的 camera block、ViF sidecar 对当前 16 个 index shard 的覆盖率为 100%。预检通过后，一台 16 GPU 服务器可同时跑两个模型并自动评测：
+
+```bash
+cd /input/workflow_58770161/workspace/test/cameramotion_det
+ROOT=/tmp/1res/datab_explicit_camera_sft/v1/vifbench
+mkdir -p "$ROOT"
+
+nohup env \
+STAGE=all \
+PARALLEL_MODELS=1 \
+KEEP_ALIVE_AFTER_RUN=1 \
+bash scripts/datab_explicit_camera_sft/run_vifbench.sh \
+> "$ROOT/launcher.log" 2>&1 &
+
+echo "PID: $!"
+```
+
+若每卡同时加载两个模型导致 CPU 吞吐下降或显存不足，把 `PARALLEL_MODELS=0` 即可顺序执行。主要结果为：
+
+```text
+/tmp/1res/datab_explicit_camera_sft/v1/vifbench/eval/explicit_camera_vifbench_comparison.json
+/tmp/1res/datab_explicit_camera_sft/v1/vifbench/eval/no_camera_official_eval.log
+/tmp/1res/datab_explicit_camera_sft/v1/vifbench/eval/with_camera_official_eval.log
+```
+
+sidecar 摘要、规范化 sidecar、prompt 审计及 compact eval 会持久化到 NAS：`/input/workflow_58770161/workspace/test/cameramotion_det/res/datab_explicit_camera_sft/v1/vifbench`。
