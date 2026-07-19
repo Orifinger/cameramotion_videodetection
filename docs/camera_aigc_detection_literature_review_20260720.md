@@ -34,6 +34,18 @@
 | DataA 局部编辑与 DataB 全生成混训伤害 ViF | FVBench、ActivityForensics 和 Omni-Fake 都把局部编辑与全生成视作不同问题；VidAudit 强调来源/长度/codec 等混杂控制 | DataA 用作局部定位与解释开发集，不作为通用真假主训练分布 |
 | 原检测模型本身已有较强 ViF 指标 | CoCoDetect 与 VidAudit 支持保留强基线，再融合正交低层专家，而不是反复全量覆盖式续训 | 第一版冻结 Qwen 检测模型，只训练小专家和校准器 |
 
+### 2.1 项目实测锚点
+
+下表只用于约束新方案，不替代 `docs/camera_conditioned_experiment_log.md` 中的完整实验记录。不同历史 prompt 的 ViF 数值不能互相当作严格控制；这里优先列同一实验内部的受控比较。
+
+| 受控比较 | 关键结果 | 已建立的结论 |
+|---|---|---|
+| DataB 显式 labels+caption，训练与 ViF 推理均提供同格式 camera context | no-camera Balanced ACC 约 79.09%，with-camera 约 76.42%；camera 仅在 2/19 个生成器子集获胜 | 不是“推理漏给 camera”；显式文本条件本身没有带来检测增量 |
+| 等量 detection replay / 正确 Camera VQA / 翻转 Camera VQA | Camera Macro AP 为 71.80% / 86.28% / 40.15%；正确监督的 opposite/no-frame 控制明显下降 | camera 能力可学且依赖画面，不是固定答案先验 |
+| 同三分支在无 camera 文本检测任务上 | DataA Balanced ACC 63.43% / 60.03% / 60.03%；ViF 为 77.18% / 76.81% / 77.22% | 学到 camera 不等于迁移到 detection；正确标签没有形成可辨别的正迁移 |
+| ViF 三分类 hard route | 原模型 79.18%，shared 76.30%，正确 route 74.50%，错误 route 78.03% | 粗 camera bucket 不是可靠路由依据，且“正确 route”反而最差 |
+| DINO/RAFT 几何 residual gate | appearance AUROC/BAcc 56.20/53.60；raw motion 59.13/58.51；correct geometry 56.88/55.21；wrong geometry 58.35/55.44 | 正确几何相减没有超过 raw 或 wrong control，不能继续把硬补偿当主方法 |
+
 ## 3. 分类参考文献
 
 优先级说明：`P0` 直接决定当前方法；`P1` 可直接借鉴模块、训练或评测；`P2` 用于背景、对照或扩展。
@@ -101,7 +113,7 @@
 | C01 | P0 | [Qwen3-VL Technical Report](https://arxiv.org/abs/2511.21631), arXiv 2025 | interleaved-MRoPE、DeepStack 和文字时间戳加强时空建模，但没有显式 camera pose state/head；有序帧能力不等于几何可辨识性。 |
 | C02 | P0 | [MMPareto: Boosting Multimodal Learning with Innocent Unimodal Assistance](https://proceedings.mlr.press/v235/wei24d.html), ICML 2024 | 辅助单模态目标与多模态目标存在梯度冲突；共同下降方向比固定 loss 权重更有原则。 |
 | C03 | P0 | [AdaDARE-gamma: Balancing Stability and Plasticity in Multi-modal LLMs through Efficient Adapter Merging](https://openaccess.thecvf.com/content/CVPR2025/html/Xie_AdaDARE-gamma_Balancing_Stability_and_Plasticity_in_Multi-modal_LLMs_through_Efficient_CVPR_2025_paper.html), CVPR 2025 | 支持把 camera 与 detection 视作稳定性-可塑性问题，但 adapter merge 只能缓解遗忘，不能创造任务间因果联系。 |
-| C04 | P1 | [Model Tailor: Mitigating Catastrophic Forgetting in Multi-modal Large Language Models](https://arxiv.org/abs/2402.12048), arXiv 2024 | 解释了专门微调后通用能力/旧接口下降；对应项目中 Camera Yes/No 接管 detection 输出协议。 |
+| C04 | P1 | [Model Tailor: Mitigating Catastrophic Forgetting in Multi-modal Large Language Models](https://arxiv.org/abs/2402.12048), arXiv 2024 | 解释了专门微调后通用能力或旧接口下降；对应项目中 Camera Yes/No 接管 detection 输出协议。 |
 | C05 | P1 | [Dynamic Mixture of Curriculum LoRA Experts](https://arxiv.org/abs/2506.11672), ICML 2025 | 多 LoRA expert 与 curriculum 可减少任务干扰，但目前不应在 camera signal 未成立前增加结构复杂度。 |
 | C06 | P1 | [Multimodal Continual Instruction Tuning with Dynamic Gradient Guidance](https://openaccess.thecvf.com/content/CVPR2026/html/Li_Multimodal_Continual_Instruction_Tuning_with_Dynamic_Gradient_Guidance_CVPR_2026_paper.html), CVPR 2026 | 动态梯度约束适合第二阶段 pose/detection 联合训练；第一阶段晚融合无需承担该风险。 |
 | C07 | P1 | [CL-MoE: Enhancing Multimodal Large Language Model with Dual Momentum Mixture-of-Experts](https://openaccess.thecvf.com/content/CVPR2025/html/Huai_CL-MoE_Enhancing_Multimodal_Large_Language_Model_with_Dual_Momentum_Mixture-of-Experts_CVPR_2025_paper.html), CVPR 2025 | MoE 可隔离任务参数，但会增加训练与消融负担，仅作为长期扩展。 |
@@ -128,7 +140,7 @@
 | D07 | P1 | [Generalizing Deepfake Video Detection with Plug-and-Play: Video-Level Blending and Spatiotemporal Adapter Tuning](https://openaccess.thecvf.com/content/CVPR2025/html/Yan_Generalizing_Deepfake_Video_Detection_with_Plug-and-Play_Video-Level_Blending_and_Spatiotemporal_CVPR_2025_paper.html), CVPR 2025 | 轻量时空 adapter 与 hard negative 能增强泛化；支持冻结大 backbone、训练小模块。 |
 | D08 | P1 | [D^3: Scaling Up Deepfake Detection by Learning from Discrepancy](https://openaccess.thecvf.com/content/CVPR2025/html/Yang_D3_Scaling_Up_Deepfake_Detection_by_Learning_from_Discrepancy_CVPR_2025_paper.html), CVPR 2025 | 多 generator 训练会在 ID 拟合和 OOD 泛化间冲突；正式结果必须同时报告 ID/OOD，不能只追 ViF 单点。 |
 
-共收录 **70 篇**：其中绝大多数为 2024--2026 年工作，另含 3 篇直接支撑 conditional flow/异常建模的经典工作。核心方案主要由 `A01--A09`、`B01--B03`、`C01--C03/C09` 和 `D01--D04` 决定。
+共收录 **70 篇**：其中 68 篇为 2024--2026 年工作，另含 2 篇直接支撑 conditional flow/异常建模的经典工作。核心方案主要由 `A01--A09`、`B01--B03`、`C01--C03/C09` 和 `D01--D04` 决定。
 
 ## 4. 对 Qwen3-VL-8B-Instruct 的具体判断
 
