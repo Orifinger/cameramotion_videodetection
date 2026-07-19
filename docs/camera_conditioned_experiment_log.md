@@ -29,6 +29,7 @@
 | 2026-07-15 | 二路相机硬路由检测专家门 | 未通过；停止硬路由主线 | 冻结视觉 Router 后，静止/有运动检测专家是否在无 camera 文本的 ViF-Bench 上优于同数据共享模型、原始模型和交换错误路由 | 正确路由 Balanced ACC 74.50%，低于原始模型 79.18%、共享模型 76.30% 和交换错误路由 78.03%；19 个生成器中仅 1 个胜出，全部预注册检测门失败 |
 | 2026-07-17 | 二路检测专家交叉离线诊断 | 诊断完成；确认专家语义反转 | 在不训练和不重新推理的情况下，分别比较两个专家在静止/有运动路由子集上的表现，定位错误路由胜出的原因 | 静止子集上有运动专家 Balanced ACC 高 4.23 点，有运动子集上静止专家高 3.56 点；对应生成器胜负为 18/19 和 16/19，说明相机分桶形成了反向而非预期的检测专门化 |
 | 2026-07-18 | DataB 显式 Camera labels+caption 配对检测 SFT | 未通过；显式相机文本条件路线停止 | 从同一 Qwen3-VL-8B-Instruct 出发，在完全相同的 5739 条 DataB 上训练 5 epoch，唯一改变是 user prompt 是否追加匹配的 CameraBench labels+caption，检验显式相机条件能否提高 ViF-Bench 最终 Real/Fake 指标 | 训推 prompt 与相机 sidecar 契约一致且覆盖 3160/3160；Camera 分支 Balanced ACC 76.42%、Fake F1 75.75%，均低于无 Camera 的 79.09%/79.44%，且 19 个生成器中仅 2 个胜出 |
+| 2026-07-19 | DataB 到 ViF-Bench 的相机条件化几何残差最小验证 | 待执行；数据审计与代码已完成 | 不使用 DataA、CoT 或相机文本，检验正确相机几何补偿后的残差是否稳定优于原始运动和错配几何控制 | DataB 去重后 5639 个可用视频，约 77.7% 含运动；相机桶单独可达 57.08% Balanced ACC，已按来源、真假和运动桶控制偏置，等待冻结特征门结果 |
 | 2026-07-13 | DataB 自动解释的 DeepfakeJudge-7B 可靠性门 | 代码已就绪，待服务器执行 | 专用开源深伪解释 Judge 在 DataB 上是否真正依据有序帧、bbox、时间和类别评价自动 CoT，而不是只评价语言流畅度 | 先做 200 条分层样本及视觉错配控制；通过后才进入人工校准和全量筛选 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
@@ -2224,6 +2225,86 @@ ViF-Bench 共 3160 条，其中 Router 判为静止 2439 条、判为有运动 7
 - 两个 full-SFT 输出为正式可复用大文件，训练完成后应在容器退出前上传执行说明中给出的 OSS 目录。
 
 立即下一步：停止继续训练同类显式 labels+caption 拼接模型，也不因这次下降直接跑 labels-only/caption-only 全量消融。后续若继续使用 camera，必须让相机变量在同一检测目标中改变证据聚合或决策，并先用低成本对照证明该耦合优于等算力检测对照，再启动完整训练。
+
+## 25. DataB 到 ViF-Bench 的相机条件化几何残差最小验证
+
+### 这个实验测什么
+
+在不使用 DataA、检测 CoT、相机文本或复杂联合损失的条件下，验证“估计并消除全局相机运动后，剩余时序几何异常是否为通用 AIGC 视频检测提供独立增益”。这一步只决定是否值得把相机几何中间变量接入 Qwen3-VL，不直接声称形成最终方法。
+
+### 日期、状态和模型谱系
+
+- 日期：2026-07-19。
+- 状态：`待执行；数据审计与代码已完成`。
+- 模型谱系：冻结 DINOv2-Small 外观编码器与 TorchVision RAFT-Large 光流模型，后接同容量小型 MLP 二分类探针；不使用任何现有 Qwen3-VL detection checkpoint。
+- RAFT 权重：`/home/admin/raft_large_C_T_SKHT_V2-ff5fadd5.pth`。
+- DINOv2-Small：`/home/admin/dinov2-small`。
+
+### 训练与评测数据
+
+- DataB detection：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/detection/v4vif_2766busterall_trainall.json`。
+- DataB camera sidecar：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/datab_cameramotion_labels_final/datab_cameramotion_labels_v2.jsonl`。
+- ViF-Bench 16 帧索引：`/input/workflow_58770161/workspace/test/cameramotion_det/eval/v4train-main/test_index_splits/splits_16`。
+- ViF-Bench predicted-camera sidecar：`/input/workflow_58770161/workspace/test/camb/camerabench_outputs/vifbench_cameramotion_labels_v2/datab_cameramotion_labels_v2.jsonl`。
+- DataA、DataA mask/bbox、检测 CoT 和 camera caption 均不进入分类器训练或输入。
+- DataB 按唯一帧目录去重，并按 `来源 x Real/Fake x 相机桶` 固定分层为 85% train 与 15% validation；ViF-Bench 只作外部开发评测，阈值不得在 ViF 上选择。
+
+### 2026-07-19 DataB 数据审计
+
+| 审计项 | 数量/结果 |
+|---|---:|
+| DataB detection 原始记录 | 6766 |
+| 可匹配 camera sidecar 的 detection 记录 | 5739 |
+| 去重后的唯一视频 | 5639 |
+| 重复帧目录组 | 100 |
+| train / validation | 4794 / 845 |
+| complex-motion | 3126（55.44%） |
+| minor-motion | 1255（22.26%） |
+| static/no-motion | 1251（22.18%） |
+| 冲突相机桶 | 7（0.12%） |
+| 仅用相机桶多数类映射的 Balanced ACC | 57.08% |
+
+约 77.7% 的唯一视频包含轻微或复杂运动，因此“DataB 缺少足够相机移动”不是本轮主要瓶颈。相机桶本身与真假标签存在非零相关性，且 GenBuster 子来源中的静止比例差异更明显；这构成潜在 shortcut，而不是可直接利用的科学信号。
+
+### 唯一改变因素与控制条件
+
+四个探针使用相同样本、固定划分、DINO 外观特征、网络容量、五个随机种子和一个加权二分类 BCE；唯一差异是追加的运动块：
+
+| 分支 | 输入 | 作用 |
+|---|---|---|
+| 外观基线 | DINOv2 帧级 CLS 时序统计 | 测量不依赖运动的基线 |
+| 原始运动控制 | 外观 + RAFT 原始光流统计 | 判断普通 motion feature 是否已经足够 |
+| 正确几何残差 | 外观 + 当前帧对 homography/epipolar residual | 本轮候选方法 |
+| 错配几何控制 | 外观 + 循环错位几何模型产生的同维残差 | 排除仅因特征维数或几何统计增加而提升 |
+
+CameraBench labels/caption 只用于分层、样本权重和分桶报告，不作为分类器输入。样本权重按 `来源 x Real/Fake x 相机桶` 的逆频率计算并截断，防止模型主要依赖来源或相机桶边际。
+
+### 训练设置与预注册验收
+
+- 每个探针：`64,32` 两层 MLP、weighted BCE、AdamW、最多 120 epoch、DataB validation early stopping。
+- 五个固定随机种子集成；分类阈值只由 DataB validation 的 Balanced ACC 选择。
+- 主指标：ViF AUROC、按主要相机桶 macro Balanced ACC、逐来源 Balanced ACC 和配对分层 bootstrap。
+- 正确几何残差相对原始运动和错配几何的 ViF AUROC 都至少提高 1.0 个百分点。
+- 正确几何残差相对两个控制的运动桶 macro Balanced ACC 都至少提高 1.0 个百分点。
+- 两个 AUROC 差值的配对 bootstrap 95% CI 下界都大于 0。
+- 静止/无运动桶相对原始运动下降不超过 1.0 个百分点。
+- 至少三个可计算来源存在时，逐来源 Balanced ACC 胜率至少 60%；特征覆盖率至少 99%。
+
+### 已知偏差与结论边界
+
+- DataB 的 camera sidecar 来自 CameraBench 模型预测而非人工 gold，但本轮只用其做粗粒度分层；几何残差直接由视频帧和 RAFT 对应关系计算。
+- DataB 与 ViF-Bench 的来源分布不同，ViF 又已被项目多次用于开发，因此通过只说明存在值得继续的外部开发信号，最终仍须在零重叠 GenBuster `benchmark` 上验证。
+- 本轮使用 16 帧和二维 homography/fundamental geometry，不等价于完整 3D camera pose/depth，也不证明 CoT 或局部编辑检测提升。
+- DataA 的生成质量与 CoT 质量问题被有意隔离；若本门通过，DataA 只在后续作为局部定位诊断和定性材料，不先参与主分类器训练。
+
+### 存储、代码与下一步
+
+- 可丢弃验证特征：`/tmp/1res/camera_geometric_residual_gate/v1/features/`。
+- NAS 小型正式结果：`/input/workflow_58770161/workspace/test/cameramotion_det/res/camera_geometric_residual_gate/v1/`。
+- 执行说明：`docs/camera_geometric_residual_gate_execution_20260719.md`。
+- 代码入口：`scripts/camera_geometric_residual_gate/run.sh`。
+
+立即下一步：先执行 preflight 与 8 样本 smoke，再运行全量 DataB 到 ViF-Bench 冻结特征门。若门失败，停止相机几何主线；若通过，下一轮只把冻结几何块通过小 projector/gate 注入共享检测器，并继续使用原 detection SFT 损失，不立即加入 DataA、CoT、RL 或额外多任务损失。
 
 ## 记录维护说明
 
