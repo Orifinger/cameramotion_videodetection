@@ -55,6 +55,13 @@ def last_parts(value: str, count: int) -> str:
     return "/".join(parts[-count:]) if len(parts) >= count else value
 
 
+def leaf_space_to_underscore(value: str) -> str:
+    """Normalize a known CameraBench filename serialization mismatch."""
+    path = PurePosixPath(value)
+    leaf = path.name.replace(" ", "_")
+    return str(path.parent / leaf)
+
+
 def video_id_from_frame_dir(frame_dir: str) -> str:
     relative = relative_after_marker(frame_dir)
     if relative:
@@ -144,6 +151,7 @@ def row_values(row: Mapping[str, Any]) -> list[str]:
 
 def query_tiers(values: Iterable[str]) -> dict[str, set[str]]:
     exact: set[str] = set()
+    leaf_separator_alias: set[str] = set()
     relative: set[str] = set()
     tail2: set[str] = set()
     basename: set[str] = set()
@@ -152,6 +160,7 @@ def query_tiers(values: Iterable[str]) -> dict[str, set[str]]:
         if not value:
             continue
         exact.add(value)
+        leaf_separator_alias.add(leaf_space_to_underscore(value))
         rel = relative_after_marker(value)
         if rel:
             relative.add(rel)
@@ -159,6 +168,7 @@ def query_tiers(values: Iterable[str]) -> dict[str, set[str]]:
         basename.add(PurePosixPath(value).name)
     return {
         "exact": exact,
+        "leaf_space_to_underscore": leaf_separator_alias,
         "relative_to_test_normalized": relative,
         "last_two_path_parts": tail2,
         "basename": basename,
@@ -168,7 +178,13 @@ def query_tiers(values: Iterable[str]) -> dict[str, set[str]]:
 def build_maps(rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, set[int]]]:
     maps: dict[str, dict[str, set[int]]] = {
         name: defaultdict(set)
-        for name in ("exact", "relative_to_test_normalized", "last_two_path_parts", "basename")
+        for name in (
+            "exact",
+            "leaf_space_to_underscore",
+            "relative_to_test_normalized",
+            "last_two_path_parts",
+            "basename",
+        )
     }
     for index, row in enumerate(rows):
         for tier, keys in query_tiers(row_values(row)).items():
@@ -183,7 +199,13 @@ def resolve_row(
     maps: Mapping[str, Mapping[str, set[int]]],
 ) -> tuple[int | None, str, list[int]]:
     queries = query_tiers([expected["video_id"], expected["frame_dir_path"]])
-    for tier in ("exact", "relative_to_test_normalized", "last_two_path_parts", "basename"):
+    for tier in (
+        "exact",
+        "leaf_space_to_underscore",
+        "relative_to_test_normalized",
+        "last_two_path_parts",
+        "basename",
+    ):
         candidates: set[int] = set()
         for key in queries[tier]:
             candidates.update(maps[tier].get(key, set()))
