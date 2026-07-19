@@ -238,20 +238,10 @@ def prepare(args: argparse.Namespace) -> None:
     ambiguous: list[dict[str, Any]] = []
     methods: Counter[str] = Counter()
     usage: Counter[int] = Counter()
-    for item in expected:
-        row_index, method, candidates = resolve_row(item, raw_rows, maps)
-        methods[method] += 1
-        if row_index is None:
-            failure = {
-                **item,
-                "reason": method,
-                "candidate_row_indices": candidates,
-            }
-            if candidates:
-                ambiguous.append(failure)
-            else:
-                unmatched.append(failure)
-            continue
+
+    def add_canonical(
+        item: Mapping[str, str], row_index: int, method: str
+    ) -> None:
         usage[row_index] += 1
         labels, caption = context_signature(raw_rows[row_index])
         source_values = row_values(raw_rows[row_index])
@@ -267,6 +257,48 @@ def prepare(args: argparse.Namespace) -> None:
             }
         )
 
+    for item in expected:
+        row_index, method, candidates = resolve_row(item, raw_rows, maps)
+        methods[method] += 1
+        if row_index is None:
+            failure = {
+                **item,
+                "reason": method,
+                "candidate_row_indices": candidates,
+            }
+            if candidates:
+                ambiguous.append(failure)
+            else:
+                unmatched.append(failure)
+            continue
+        add_canonical(item, row_index, method)
+
+    # Resolve only basename collisions that become unique after every stronger
+    # path match is locked. This is deterministic one-to-one elimination, not
+    # a first-candidate fallback.
+    remaining_ambiguous: list[dict[str, Any]] = []
+    elimination_count = 0
+    for failure in ambiguous:
+        candidates = failure["candidate_row_indices"]
+        available = [index for index in candidates if usage[index] == 0]
+        if failure["reason"] == "basename_ambiguous" and len(available) == 1:
+            row_index = available[0]
+            item = {
+                key: failure[key]
+                for key in ("video_id", "frame_dir_path", "aigc_model_name")
+            }
+            method = "basename_one_to_one_elimination"
+            add_canonical(item, row_index, method)
+            methods[failure["reason"]] -= 1
+            methods[method] += 1
+            elimination_count += 1
+        else:
+            failure["unused_candidate_row_indices"] = available
+            remaining_ambiguous.append(failure)
+    ambiguous = remaining_ambiguous
+    expected_order = {item["video_id"]: index for index, item in enumerate(expected)}
+    canonical.sort(key=lambda row: expected_order[row["video_id"]])
+
     reused_rows = {str(index): count for index, count in usage.items() if count > 1}
     coverage = len(canonical) / len(expected)
     write_jsonl(args.output_jsonl, canonical)
@@ -281,7 +313,8 @@ def prepare(args: argparse.Namespace) -> None:
         "matched_samples": len(canonical),
         "coverage": coverage,
         "min_required_coverage": args.min_coverage,
-        "match_method_counts": dict(methods),
+        "match_method_counts": {key: value for key, value in methods.items() if value},
+        "one_to_one_elimination_count": elimination_count,
         "unmatched_count": len(unmatched),
         "ambiguous_count": len(ambiguous),
         "reused_source_camera_rows": reused_rows,

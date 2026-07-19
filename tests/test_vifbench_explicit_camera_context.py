@@ -67,6 +67,63 @@ class VifbenchCameraContextTest(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["video_id"], "real/sample-1")
 
+    def test_prepare_resolves_basename_collision_by_one_to_one_elimination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index_dir = root / "index"
+            index_dir.mkdir()
+            (index_dir / "test_index.rank0.json").write_text(
+                json.dumps(
+                    {
+                        "real": ["/frames/test_normalized/real/shared-id"],
+                        "fakegen": ["/frames/test_normalized/fakegen/shared-id"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            camera_jsonl = root / "camera.jsonl"
+            camera_jsonl.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "path": "/frames/test_normalized/real/shared-id",
+                                "labels": ["no-motion"],
+                                "caption": "The camera is static.",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "path": "/legacy/unmapped-generator/shared-id",
+                                "labels": ["pan-left"],
+                                "caption": "The camera pans left.",
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            output = root / "canonical.jsonl"
+            summary = root / "summary.json"
+            prepare(
+                argparse.Namespace(
+                    index_dir=index_dir,
+                    camera_json=camera_jsonl,
+                    output_jsonl=output,
+                    summary_json=summary,
+                    expected_ranks=1,
+                    min_coverage=1.0,
+                )
+            )
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["one_to_one_elimination_count"], 1)
+            self.assertEqual(result["ambiguous_count"], 0)
+            self.assertEqual(rows[1]["match_method"], "basename_one_to_one_elimination")
+            self.assertEqual(rows[1]["labels"], ["pan-left"])
+
     def test_prompt_audit_enforces_exact_training_append(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
