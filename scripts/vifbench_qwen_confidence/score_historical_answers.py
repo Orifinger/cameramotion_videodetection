@@ -81,29 +81,47 @@ def answer_token_contract(tokenizer: Any, response: str) -> dict[str, Any]:
         if actual != alternate:
             break
         common_prefix += 1
-    contract_valid = (
-        common_prefix < len(actual_ids)
-        and common_prefix < len(alternate_ids)
-        and len(actual_ids) == len(alternate_ids)
-        and actual_ids[common_prefix + 1 :] == alternate_ids[common_prefix + 1 :]
+    common_suffix = 0
+    maximum_suffix = min(
+        len(actual_ids) - common_prefix,
+        len(alternate_ids) - common_prefix,
     )
-    if not contract_valid:
+    while (
+        common_suffix < maximum_suffix
+        and actual_ids[len(actual_ids) - common_suffix - 1]
+        == alternate_ids[len(alternate_ids) - common_suffix - 1]
+    ):
+        common_suffix += 1
+    actual_end = len(actual_ids) - common_suffix if common_suffix else len(actual_ids)
+    alternate_end = (
+        len(alternate_ids) - common_suffix if common_suffix else len(alternate_ids)
+    )
+    actual_span = actual_ids[common_prefix:actual_end]
+    alternate_span = alternate_ids[common_prefix:alternate_end]
+    if not actual_span or not alternate_span:
         return {
             "valid": False,
-            "reason": "real_fake_substitution_is_not_one_token",
+            "reason": "real_fake_substitution_has_no_distinct_token",
             "archived_answer": archived_answer,
             "actual_token_count": len(actual_ids),
             "alternate_token_count": len(alternate_ids),
             "common_prefix_tokens": common_prefix,
+            "common_suffix_tokens": common_suffix,
         }
-    actual_token_id = int(actual_ids[common_prefix])
-    alternate_token_id = int(alternate_ids[common_prefix])
-    real_token_id = actual_token_id if archived_answer == "Real" else alternate_token_id
-    fake_token_id = actual_token_id if archived_answer == "Fake" else alternate_token_id
+    actual_token_id = int(actual_span[0])
+    alternate_token_id = int(alternate_span[0])
+    real_span = actual_span if archived_answer == "Real" else alternate_span
+    fake_span = actual_span if archived_answer == "Fake" else alternate_span
+    real_token_id = int(real_span[0])
+    fake_token_id = int(fake_span[0])
     return {
         "valid": True,
+        "scoring_scope": "first_divergent_answer_token",
         "archived_answer": archived_answer,
         "answer_prefix_token_count": common_prefix,
+        "common_suffix_token_count": common_suffix,
+        "real_candidate_token_count": len(real_span),
+        "fake_candidate_token_count": len(fake_span),
         "real_token_id": real_token_id,
         "fake_token_id": fake_token_id,
         "real_token_text": tokenizer.decode([real_token_id]),

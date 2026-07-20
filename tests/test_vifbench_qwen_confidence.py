@@ -45,6 +45,30 @@ def test_answer_token_contract_finds_single_real_fake_substitution() -> None:
     assert result["fake_token_text"] == "Fake"
 
 
+class ContextSplitTokenizer:
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        del add_special_tokens
+        if "<answer>Real</answer>" in text:
+            return [1, 2, 10, 20, 30]
+        if "<answer>Fake</answer>" in text:
+            return [1, 2, 11, 21, 30]
+        raise ValueError(text)
+
+    def decode(self, token_ids: list[int]) -> str:
+        return {10: "Real", 11: "Fake"}.get(token_ids[0], "suffix")
+
+
+def test_answer_token_contract_accepts_context_dependent_suffix_split() -> None:
+    result = answer_token_contract(
+        ContextSplitTokenizer(), "<answer>Real</answer>"
+    )
+    assert result["valid"] is True
+    assert result["scoring_scope"] == "first_divergent_answer_token"
+    assert result["real_token_id"] == 10
+    assert result["fake_token_id"] == 11
+    assert result["real_candidate_token_count"] == 2
+    assert result["fake_candidate_token_count"] == 2
+
 def test_confidence_fusion_audit_uses_grouped_oof(tmp_path: Path) -> None:
     confidence_dir = tmp_path / "confidence"
     confidence_dir.mkdir()
