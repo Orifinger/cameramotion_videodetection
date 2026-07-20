@@ -1,0 +1,196 @@
+{
+  "schema_version": "datab_temporal_supervision_audit_v1",
+  "source": {
+    "path": "D:\\1codex\\camera\\cameramotion_videodetection\\ourdata\\dataB\\v4vif_2766busterall_trainall.json",
+    "sha256": "06af06923c537a297e6b7a55620ce5dfe6041379965f0684bfba961b81b579bb"
+  },
+  "definition": {
+    "important_caveat": "A <t> interval is required by the prompt and is not counted as temporal reasoning. Temporal supervision is reported separately using conservative artifact types and explicit cross-frame language.",
+    "conservative_temporal_artifact_types": [
+      "Cross-frame Identity Drift",
+      "Entity Reappearance Change",
+      "Face Identity Drift",
+      "Inconsistent Text Across Frames",
+      "Motion Discontinuity",
+      "Object Category Shift",
+      "Object Identity Drift",
+      "Texture Flicker"
+    ],
+    "strong_temporal_language_patterns": [
+      "across_frames",
+      "between_frames",
+      "discontinuity",
+      "drift",
+      "flicker",
+      "frame_to_frame",
+      "ordered_frames",
+      "over_time",
+      "reappearance",
+      "sequence_progression",
+      "temporal_term",
+      "throughout_sequence"
+    ]
+  },
+  "overall": {
+    "records": 6766,
+    "answers": {
+      "Fake": 3383,
+      "Real": 3383
+    },
+    "frame_count_distribution": {
+      "11": 1,
+      "16": 6748,
+      "17": 17
+    },
+    "valid_think_answer_records": 6766,
+    "valid_think_answer_rate": 1.0,
+    "user_prompts_with_timestamps": 6766,
+    "user_prompt_timestamp_rate": 1.0
+  },
+  "structured_evidence": {
+    "records_with_artifact_types": 3383,
+    "artifact_type_record_rate": 0.5,
+    "artifact_type_occurrences": 5250,
+    "artifact_occurrence_counts": {
+      "Contact Region Artifact": 1654,
+      "Hand Anatomy Error": 1015,
+      "Object Deformation": 501,
+      "Facial Landmark Distortion": 414,
+      "Boundary Fusion": 381,
+      "Physical Interaction Error": 341,
+      "Malformed Text": 279,
+      "Occlusion Error": 168,
+      "Motion Discontinuity": 123,
+      "Object Part Inconsistency": 100,
+      "Face Boundary Fusion": 93,
+      "Material Inconsistency": 83,
+      "Lighting / Shadow Inconsistency": 64,
+      "Texture Flicker": 9,
+      "Face Identity Drift": 8,
+      "Inconsistent Text Across Frames": 4,
+      "Object Identity Drift": 4,
+      "Implausible Contact": 3,
+      "Limb Structure Error": 3,
+      "Body Proportion Error": 2,
+      "Over-smoothed Generated Texture": 1
+    },
+    "artifact_record_counts": {
+      "Contact Region Artifact": 1604,
+      "Hand Anatomy Error": 975,
+      "Object Deformation": 478,
+      "Boundary Fusion": 368,
+      "Facial Landmark Distortion": 354,
+      "Physical Interaction Error": 330,
+      "Malformed Text": 273,
+      "Occlusion Error": 166,
+      "Motion Discontinuity": 116,
+      "Object Part Inconsistency": 99,
+      "Face Boundary Fusion": 93,
+      "Material Inconsistency": 83,
+      "Lighting / Shadow Inconsistency": 62,
+      "Texture Flicker": 8,
+      "Face Identity Drift": 8,
+      "Inconsistent Text Across Frames": 4,
+      "Object Identity Drift": 4,
+      "Implausible Contact": 3,
+      "Limb Structure Error": 3,
+      "Body Proportion Error": 2,
+      "Over-smoothed Generated Texture": 1
+    },
+    "records_with_time_tags": 6753,
+    "time_tag_record_rate": 0.9980786284362991,
+    "total_time_tags": 11769,
+    "records_with_bbox_tags": 6753,
+    "bbox_tag_record_rate": 0.9980786284362991,
+    "valid_time_tags_for_span_ratio": 11769,
+    "broad_time_tags_ge_80pct": 8543,
+    "broad_time_tag_rate": 0.7258900501317019,
+    "full_clip_time_tags": 8083,
+    "full_clip_time_tag_rate": 0.686804316424505
+  },
+  "temporal_supervision": {
+    "temporal_artifact_occurrences": 148,
+    "temporal_artifact_occurrence_rate_among_artifacts": 0.02819047619047619,
+    "records_with_temporal_artifact_type": 139,
+    "record_rate_with_temporal_artifact_type": 0.020543895950339935,
+    "fake_records_with_temporal_artifact_type": 139,
+    "fake_record_rate_with_temporal_artifact_type": 0.04108779190067987,
+    "fake_records_with_only_non_temporal_types": 3244,
+    "fake_record_rate_with_only_non_temporal_types": 0.9589122080993201,
+    "records_with_strong_temporal_language": 3701,
+    "strong_temporal_language_rate": 0.5469997044043748,
+    "fake_records_with_strong_temporal_language": 966,
+    "fake_strong_temporal_language_rate": 0.28554537392846585,
+    "real_records_with_strong_temporal_language": 2735,
+    "real_strong_temporal_language_rate": 0.8084540348802838,
+    "strong_temporal_phrase_record_counts": {
+      "across_frames": 3303,
+      "between_frames": 236,
+      "throughout_sequence": 211,
+      "drift": 183,
+      "ordered_frames": 153,
+      "discontinuity": 143,
+      "flicker": 97,
+      "reappearance": 70,
+      "temporal_term": 61,
+      "over_time": 53,
+      "frame_to_frame": 35,
+      "sequence_progression": 10
+    },
+    "records_with_weak_motion_language": 4376,
+    "weak_motion_language_rate": 0.646763227904227
+  },
+  "examples": {
+    "strong_temporal_language_real": [
+      {
+        "record_index": 2,
+        "answer": "Real",
+        "assistant_excerpt": "<think>The VR headset’s front face displays the text “Crystal Cove Prototype” which becomes progressively clearer across frames, with each letter maintaining its standard Latin form and spatial alignment without merging or distortion <t>[0.00, 4.04]</t> at <bbox>[313, 170, 687, 300]</bbox>. The headset’s corners and edges remain sharply defined and geometrically fixed throughout the sequence, showing no signs of warping, smearing, or structural collapse <t>[0.00, 4.04]</t> at <bbox>[0, 0, 1000, "
+      },
+      {
+        "record_index": 5,
+        "answer": "Real",
+        "assistant_excerpt": "<think>The video shows a stationary black motorcycle parked in front of a building with a visible sign. The sign displays “LAIDLAW’S HARLEY-DAVIDSON” with letters that maintain uniform shape, spacing, and stroke integrity across all frames, showing no signs of distortion or merging <t>[0.00, 4.73]</t> at <bbox>[0, 0, 282, 328]</bbox>. The motorcycle’s wheels exhibit spokes and wheel geometry keeping circular spacing and spacing, without warping, bending, or structural inconsistency in their geom"
+      },
+      {
+        "record_index": 6,
+        "answer": "Real",
+        "assistant_excerpt": "<think>The person in the red top and dark hat stands near an apple tree under a clear blue sky, with motion and object structure matching outdoor conditions. The visible portion of the face around the nose and mouth, partially covered by hands and a beanie, maintains shape keeping its visible proportions and alignment as the hands shift slightly across frames, with no smudging or geometric distortion in the exposed contours <t>[0.00, 1.54]</t> at <bbox>[248, 70, 602, 530]</bbox>. The hand near t"
+      }
+    ],
+    "strong_temporal_language_fake": [
+      {
+        "record_index": 9,
+        "answer": "Fake",
+        "assistant_excerpt": "<think>A surreal landscape features a large tree and a partially submerged grand piano in calm water, with a floating abstract object drifting across the sky. The piano legs are partially submerged but show no realistic water displacement, wake, or buoyancy effects at the contact boundary. The water surface remains uniformly rippled and undisturbed around the legs, which is physically inconsistent for a heavy object partially submerged in water. <type>Contact Region Artifact</type> in <t>[0.00, "
+      },
+      {
+        "record_index": 17,
+        "answer": "Fake",
+        "assistant_excerpt": "<think>A person walks forward along a narrow cobblestone street, smiling with hair moving gently as if caught in a breeze. The background remains static, suggesting a fixed camera perspective under even lighting. The shoulder strap of the bag shows no physical interaction with the clothing, maintaining a rigid position and angle without any compression, shadow, or fabric deformation across frames, which supports <type>Contact Region Artifact</type> in <t>[0.00, 4.73]</t> at <bbox>[182, 415, 776,"
+      },
+      {
+        "record_index": 25,
+        "answer": "Fake",
+        "assistant_excerpt": "<think>A small reddish-brown object moves slowly across a dark granular substrate inside a translucent plastic container, with visible wall reflections and consistent lighting. The object’s edges visually blend into the substrate during contact, lacking a distinct silhouette or particle displacement consistent with physical interaction. The object’s silhouette changes in ways that are not explainable by motion or camera angle, indicating structural instability typical of generated content. <type"
+      }
+    ],
+    "temporal_artifact_type": [
+      {
+        "record_index": 25,
+        "answer": "Fake",
+        "assistant_excerpt": "<think>A small reddish-brown object moves slowly across a dark granular substrate inside a translucent plastic container, with visible wall reflections and consistent lighting. The object’s edges visually blend into the substrate during contact, lacking a distinct silhouette or particle displacement consistent with physical interaction. The object’s silhouette changes in ways that are not explainable by motion or camera angle, indicating structural instability typical of generated content. <type"
+      },
+      {
+        "record_index": 90,
+        "answer": "Fake",
+        "assistant_excerpt": "<think>A person in an orange life vest sits on a rocky shore watching birds fly against a clear sky, with waves breaking nearby. The birds’ movements are inconsistent, appearing and vanishing across frames with sudden shifts in position and wing angle that defy natural flight paths. One bird at the top right vanishes between frames and reappears later with a different wing orientation, indicating an implausible motion jump not explainable by normal motion blur or sampling gaps. Bird wings also s"
+      },
+      {
+        "record_index": 143,
+        "answer": "Fake",
+        "assistant_excerpt": "<think>A person in a black hoodie leans against a dark pole on a city sidewalk, with traffic flowing in the background and the camera slowly reframing toward them. The vehicles in the background display unnatural motion artifacts that contradict real-world physics. A dark sedan at T=0.00s shows clear taillights, but by T=0.63s it becomes a smeared red shape with no structure, and at T=1.89s a brightly colored vehicle exhibits color bleeding and distorted geometry, inconsistent with natural motio"
+      }
+    ]
+  }
+}

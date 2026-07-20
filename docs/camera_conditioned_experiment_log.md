@@ -25,6 +25,7 @@
 | 2026-07-13 | DataB 自动解释的 DeepfakeJudge-7B 可靠性门 | 代码已就绪，待服务器执行 | 专用开源深伪解释 Judge 在 DataB 上是否真正依据有序帧、bbox、时间和类别评价自动 CoT，而不是只评价语言流畅度 | 先做 200 条分层样本及视觉错配控制；通过后才进入人工校准和全量筛选 |
 | 2026-07-20 | 连续相机条件下的时序正常性专家验证（CTNE Gate 1） | 未通过；ViF-Bench 正式门失败 | 在不训练 Qwen、不输入 camera 文本的条件下，匹配的连续相机几何是否使真实视频时序正常性模型稳定优于同容量无条件与打乱条件 | matched 相对 unconditional 的 AUROC 为 -0.009 点，95% CI 跨 0；相机条件未带来增量，且跨域正常性分数接近反向随机，不再将该 CTNE 配方作为 camera 主线 |
 | 2026-07-20 | 最终真假监督下的连续相机交互判别门 | 未通过；正确相机与打乱相机不可区分 | 直接以 DataB Real/Fake 监督训练相机-证据交互分类器，检验连续相机几何能否带来外部检测增量 | matched 相对 evidence-only 仅增 0.37 AUROC 点且置信区间跨 0；相对 shuffled 也不显著，不支持 camera 主贡献 |
+| 2026-07-20 | DataB 自动解释的时序监督内容审计 | 已完成；确认时序监督稀少且真假不对称 | 统计 6766 条 DataB SFT 回答中真正的时序伪影类别、显式跨帧语言和时间标签覆盖范围 | 仅 4.11% Fake 样本含保守时序伪影类别；Real/Fake 显式跨帧语言分别为 80.85%/28.55%，当前数据主要监督空间伪影和 Real 稳定性验证 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -1471,6 +1472,51 @@ matched 相对 evidence-only 的 AUROC 提高 `0.37` 点、跨生成器 Macro Ba
 ### 立即下一步
 
 本门已完成且未通过。保留九个小模型、校准文件和逐项结果用于归档，不为当前配方追加 epoch、camera RL、Qwen 融合或 GenBuster 全量评测；下一步重新选择不依赖“正确 camera 必须优于 shuffled camera”这一未被数据支持的检测切入点。
+
+## 20. DataB 自动解释的时序监督内容审计
+
+### 这个实验测什么
+
+在不训练模型的条件下，审计完整 DataB 检测 SFT 数据中的 assistant CoT 到底提供了多少真实跨帧监督。实验严格区分 system prompt 强制要求的 `<t>[start, end]</t>` 格式与真正的时序推理：前者只说明输出包含时间段，后者要求出现保守的时序伪影类别或明确比较多个时刻/帧的语言。
+
+### 日期、状态、数据与工具
+
+- 日期：2026-07-20。
+- 状态：`已完成`。
+- 本地输入：`D:/1codex/camera/cameramotion_videodetection/ourdata/dataB/v4vif_2766busterall_trainall.json`。
+- 服务器对应输入：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/detection/v4vif_2766busterall_trainall.json`。
+- 输入 SHA256：`06af06923c537a297e6b7a55620ce5dfe6041379965f0684bfba961b81b579bb`。
+- 可复用工具：`tools/audit_datab_temporal_supervision.py`。
+- 结果：`docs/datab_temporal_supervision_audit_20260720.json` 与 `docs/datab_temporal_supervision_audit_20260720.md`。
+
+### 审计口径
+
+- 保守时序类别包括 `Motion Discontinuity`、`Texture Flicker`、`Face/Object Identity Drift`、`Inconsistent Text Across Frames`、`Entity Reappearance Change`、`Cross-frame Identity Drift` 和 `Object Category Shift`。
+- “显式跨帧语言”匹配 `across/between frames`、`frame-to-frame`、`over time`、`later/subsequent frames`、`throughout sequence`、`temporal`、`flicker/drift/discontinuity/reappearance` 等表达。
+- `<t>` 标签不直接计为时序推理；另外统计其覆盖至少 80% 视频和精确覆盖整段视频的比例，用来判断时间标签是否具有定位信息。
+- 该审计只测训练文本内容，不测 Qwen 是否利用顺序，也不测时序特征是否改善 Real/Fake。
+
+### 结果
+
+| 指标 | 结果 |
+|---|---:|
+| 总样本 | 6766（Real 3383 / Fake 3383） |
+| 帧数分布 | 11 帧 1 条；16 帧 6748 条；17 帧 17 条 |
+| 具有保守时序伪影类别的 Fake 样本 | 139/3383（4.11%） |
+| 时序类别在全部伪影标签中的占比 | 148/5250（2.82%） |
+| 仅含非时序类别的 Fake 样本 | 3244/3383（95.89%） |
+| 含显式跨帧语言的 Fake 样本 | 966/3383（28.55%） |
+| 含显式跨帧语言的 Real 样本 | 2735/3383（80.85%） |
+| 覆盖至少 80% 视频长度的时间标签 | 8543/11769（72.59%） |
+| 精确覆盖整段视频的时间标签 | 8083/11769（68.68%） |
+
+伪影标签主要是 `Contact Region Artifact`（1654）、`Hand Anatomy Error`（1015）、`Object Deformation`（501）、`Facial Landmark Distortion`（414）和 `Boundary Fusion`（381）；明确的 `Motion Discontinuity` 只有 123 次。Real CoT 经常使用“跨帧保持稳定”的验证模板，而 Fake CoT 主要定位单帧可见的接触、解剖、形变和边界异常，形成明显的真假监督不对称。
+
+### 结论、限制与下一步
+
+结论标记：`已完成`。当前 DataB 足以训练空间伪影检测和 Real 稳定性描述，但不能作为 Qwen 已获得均衡时序取证监督的证据。大量时间标签覆盖整段视频，也说明标签存在不等于细粒度时序定位。
+
+本结果不证明 Qwen3-VL 没有时序能力，也不证明独立时序专家无效。下一步若继续时序方向，必须先做输入协议审计和外部数据上的时序敏感性干预；同时将独立专家分数与 Qwen 逐样本错误对齐，验证 matched evidence 是否能纠正残余错误并优于 shuffled evidence。未通过该残余互补性门前，不启动时序联合 SFT、PPRL 或完整模型融合。
 
 ## 记录维护说明
 
