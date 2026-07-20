@@ -27,6 +27,7 @@
 | 2026-07-20 | 最终真假监督下的连续相机交互判别门 | 未通过；正确相机与打乱相机不可区分 | 直接以 DataB Real/Fake 监督训练相机-证据交互分类器，检验连续相机几何能否带来外部检测增量 | matched 相对 evidence-only 仅增 0.37 AUROC 点且置信区间跨 0；相对 shuffled 也不显著，不支持 camera 主贡献 |
 | 2026-07-20 | DataB 自动解释的时序监督内容审计 | 已完成；确认时序监督稀少且真假不对称 | 统计 6766 条 DataB SFT 回答中真正的时序伪影类别、显式跨帧语言和时间标签覆盖范围 | 仅 4.11% Fake 样本含保守时序伪影类别；Real/Fake 显式跨帧语言分别为 80.85%/28.55%，当前数据主要监督空间伪影和 Real 稳定性验证 |
 | 2026-07-20 | Qwen 与时序专家的 ViF-Bench 残余错误互补性审计 | 未通过；可救错误无法转化为稳定检测增量 | 同一样本上检查时序专家能否纠正 Qwen 的残余错误，并在原视频分组交叉拟合中稳定提高最终 Real/Fake 指标 | 专家能覆盖部分 Qwen 错误，但分歧时绝大多数是 Qwen 正确；主融合没有翻转任何答案，嵌套阈值校准也仅提高约 0.05 点 |
+| 2026-07-20 | 强检测答案置信度条件下的时序与相机专家融合诊断 | 代码已完成，待服务器执行 | 保留历史强 Qwen 硬答案，只补算 `<answer>` 位置的 Real/Fake token logit，检验低置信度路由能否把既有专家的少量可救错误转化为稳定增量 | 待补充；这是当前 RAFT/DINO 与 camera 专家配方的最后一个低成本充分性检查 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -1604,6 +1605,61 @@ Qwen 共错 319 条，专家能判对其中 122 条，表面 rescue coverage 为
 ViF-Bench 已被项目反复查看，而且其标签参与五折融合器拟合，所以 OOF 结果只是开发诊断，不是论文中的正式外部提升。它通过只证明专家错误与 Qwen 错误存在样本对齐、可学习的互补性；下一步必须在 DataB 留出集训练冻结路由器，并只在未用于选择方案的 GenBuster benchmark 上验收。它不支持重新宣称 camera 有效，因为第 19 节已经证明正确 camera 与打乱 camera 不可区分，本门默认使用 camera-independent 的 evidence-only 专家。
 
 本门已经未通过。当前专家配方停止，不启动联合 SFT、RL 或基于该专家的大型 Qwen 推理。若后续重新考虑专家融合，必须先获得 Qwen 的连续 Real/Fake token logits，并在独立校准集证明可识别的 trust signal；不能再依赖 Oracle 上限或 ViF-Bench 内部调阈值。
+## 22. 强检测答案置信度条件下的时序与相机专家融合诊断
+
+### 这个实验测什么
+
+历史强 Qwen 检测结果只有最终 Real/Fake 硬答案，上一门无法知道模型何时犹豫。本实验不重新生成或替换历史答案，而是在完全相同的 ViF-Bench 帧序列、system prompt、user prompt 和已生成 CoT 下，teacher-force 到 `<answer>` 之前，补算 Real/Fake 两个候选 token 的条件 logit。随后用原视频分组的五折 OOF 对比“仅 Qwen 置信度”“Qwen 加无相机时序证据”“Qwen 加正确相机交互专家”“Qwen 加打乱相机交互专家”和“Qwen 加仅相机专家”，回答缺少 Qwen 置信度是否是上一轮无法可靠路由的主要原因。
+
+### 日期、状态与模型谱系
+
+- 日期：2026-07-20。
+- 状态：代码已完成，待服务器执行。
+- 模型起点：完整 DataB detection SFT 的 Qwen3-VL-8B `checkpoint-2115`。
+- 历史硬预测：原 83.96% ViF-Bench 协议的 3160 条 response；本实验沿用这些 response，不执行新的长 CoT 生成。
+- 专家输入：第 19 节逐样本结果中的 `evidence_only_score`、`matched_score`、`shuffled_camera_score` 和 `camera_only_score`。
+- 推理时不追加 camera 文本；camera 只作为既有独立专家中的连续交互特征参与冻结后端诊断。
+
+### 数据与精确路径
+
+- 模型：`/tmp/1res/v4vif_2766busterall_trainall_5epoch/checkpoint-2115`。
+- 历史强预测：`/input/workflow_58770161/workspace/test/test_selfcot/Skyra/res/v4vif_2766busterall_trainall/v4vif_2766busterall_trainall-3vl8b-vifbench/Qwen3-VL-v4vif_2766busterall_trainall-vifbench.json`。
+- ViF-Bench 分片索引：默认从 `${PROJECT_ROOT}/eval/v4train-main/eval/test_index_splits/splits_16` 读取；若实际位于 `eval/v4train-main/test_index_splits/splits_16`，脚本自动回退。
+- 时序与相机专家逐样本 CSV：`/input/workflow_58770161/workspace/test/cameramotion_det/res/camera_discriminative_gate/v1/eval/vifbench/camera_discriminative_gate_items.csv`。
+- 临时运行目录：`/tmp/1res/vifbench_qwen_confidence_fusion/v1`。
+- 持久化小结果：`/input/workflow_58770161/workspace/test/cameramotion_det/res/vifbench_qwen_confidence_fusion/v1`。
+
+### 单一变化与控制
+
+所有条件共享同一批历史硬答案、同一组分折、同一逻辑回归容量和同一训练权重。唯一变化是融合器在 Qwen 的 `Fake-Real` logit margin 之外接收哪一个专家连续分数。
+
+| 条件 | 输入特征 | 回答的问题 |
+|---|---|---|
+| 历史 Qwen 硬预测 | 原 Real/Fake | 强基线 |
+| 仅 Qwen 置信度校准 | Qwen logit margin | 置信度本身能否校准边界 |
+| Qwen + 无相机时序证据 | Qwen margin + `evidence_only_score` | 时序证据是否在低置信度样本上互补 |
+| Qwen + 正确相机交互 | Qwen margin + `matched_score` | 正确 camera 交互是否产生额外互补性 |
+| Qwen + 打乱相机交互 | Qwen margin + `shuffled_camera_score` | 正确 camera 是否优于错误 camera |
+| Qwen + 仅相机专家 | Qwen margin + `camera_only_score` | 仅 camera 是否携带可用检测信号 |
+
+### 训练、评测与验收
+
+- Qwen 只做 teacher-forcing 前向，不训练、不采样、不重新生成；16 张 GPU 各处理一个既有 ViF-Bench rank。
+- Real/Fake 必须在 tokenizer 中构成同一位置的单 token 替换；补算分数的 argmax 必须与历史贪心答案至少 99% 一致，否则说明提示词或 token 合约没有复现，停止解释融合结果。
+- 融合器使用五折 `StratifiedGroupKFold`，按同源 `base_id` 隔离；同一原视频身份不能跨训练折和测试折。
+- 主指标是跨生成器 Macro Balanced ACC；所有融合相对“仅 Qwen 置信度校准”至少提高 0.5 点，且原视频分组 bootstrap 95% CI 下界大于 0，才认为专家提供稳定增量。
+- 若声称 camera 有效，正确相机交互还必须分别超过无相机时序证据和打乱相机交互至少 0.5 点，两项 bootstrap 95% CI 下界都大于 0。
+- 科学门未通过时程序仍正常保存结果，不把“方法无效”混同为运行错误。
+
+### 泄漏、结论边界与下一步
+
+ViF-Bench 标签参与 OOF 融合器拟合，因此本实验只是方向选择诊断，不是论文最终测试。若正确相机交互通过，下一步必须在独立 DataB 留出集训练冻结路由器，并只在尚未用于方案选择的 GenBuster benchmark 上正式验收；若只有无相机时序证据通过，则停止 camera 主张；若两者都不通过，则关闭当前 camera/RAFT-DINO 专家融合配方，转向分析强 Qwen 残余错误后重新选择专项专家。
+
+### 输出存储分类
+
+- Qwen 置信度分片、融合逐样本 CSV、JSON 摘要和 Markdown 报告均为小型可复用正式结果，完成后自动复制到 NAS 的上述持久化目录。
+- 不产生视频、NPZ 特征或 checkpoint；本轮不需要 OSS 上传。
+
 ## 记录维护说明
 
 - 新实验开始时先在本文件新增中文实验定义和验收标准。
