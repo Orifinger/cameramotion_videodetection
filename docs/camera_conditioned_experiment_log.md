@@ -29,6 +29,7 @@
 | 2026-07-20 | Qwen 与时序专家的 ViF-Bench 残余错误互补性审计 | 未通过；可救错误无法转化为稳定检测增量 | 同一样本上检查时序专家能否纠正 Qwen 的残余错误，并在原视频分组交叉拟合中稳定提高最终 Real/Fake 指标 | 专家能覆盖部分 Qwen 错误，但分歧时绝大多数是 Qwen 正确；主融合没有翻转任何答案，嵌套阈值校准也仅提高约 0.05 点 |
 | 2026-07-20 | 强检测答案置信度条件下的时序与相机专家融合诊断 | 未通过；当前专家融合配方停止 | 保留历史强 Qwen 硬答案，只补算 `<answer>` 位置的 Real/Fake token logit，检验低置信度路由能否把既有专家的少量可救错误转化为稳定增量 | 置信度前向 100% 复现历史有效答案，但无相机时序证据增量为 0；正确相机交互略降且与打乱相机完全相同，排除“只缺 Qwen 置信度”的解释 |
 | 2026-07-20 | ViF-Bench 强检测模型残余错误结构审计 | 已完成；当前 camera 推理融合闭环否定 | 对齐 Qwen CoT、置信度、生成器、相机标签与专家分数，分析 319 个残余错误集中在哪里以及 camera 是否仍可形成可执行信号 | 71.2% Fake 漏检集中于六类 I2V/编辑模型；camera 是难度轴但直接校准最多仅增 0.032 点且 CI 下界为 0，下一步先做分层视觉审计，再决定是否验证训练时难度分层 |
+| 2026-07-21 | 源内容去偏的原生尺度取证检测 | 方案已立项；阶段 0 待实现 | 训练时使用同源 Real/Fake 配对去除源内容捷径，并保留原生尺度局部取证信号，推理时仍只输入单个视频 | camera 不再是主方法；先做数据泄漏审计和公开 native-scale backbone 能力门，通过后才进入正确配对/打乱配对/单视频三分支训练 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -1724,6 +1725,59 @@ CoT 同样呈现类别模板化：38 个 Real→Fake 全部输出伪影标签，
 
 在启动新训练前，先抽取约 60–80 个 Hunyuan-I2V、Wan-VACE、其他 I2V 的 Fake→Real，同源 Real、正确 Fake 和 Real→Fake 做视觉审计。若视觉审计支持 hard-example 训练，再做等样本等步骤的 2×2 replay：随机、生成器 hard、camera hard、生成器+camera hard。只有 camera 分支超过生成器 hard 控制至少 0.5 个跨生成器 Macro Balanced ACC 点、matched 权重超过 shuffled 且 bootstrap 95% CI 下界大于 0，才保留 camera 方法主张。
 
+
+## 24. 源内容去偏的原生尺度取证检测
+
+### 这个实验测什么
+
+检验强 MLLM 在高质量 I2V/编辑视频上的 Fake→Real 漏检是否主要来自源内容捷径，以及训练时同源 Real/Fake 配对能否让原生尺度专用检测器学到推理时单视频可用的生成痕迹。最终主指标仍是 Real/Fake 检测；配对、局部 mask 和后续解释只用于改善或解释该主任务。
+
+### 日期、状态与模型谱系
+
+- 日期：2026-07-21。
+- 状态：`方案已立项；阶段 0 待实现`。
+- 历史基线：完整 DataB detection SFT 的 Qwen3-VL-8B `checkpoint-2115`，只作为 MLLM 基线，不再预设为新方法主检测器。
+- 候选主检测器：公开 native-scale Qwen2.5-ViT 448p、720p；CoCoDetect/R3D-18 作为轻量对照。
+- 完整方案：`docs/source_paired_native_forensics_plan_20260721.md`。
+
+### 数据及角色
+
+- DataB detection：`/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/detection/v4vif_2766busterall_trainall.json`；保留二分类与生成器来源，自动 CoT 不作为取证真值。
+- DataA：统一 40step_v3 帧、1080 个同源 Real/Fake case 及已有 mask/bbox；只用于配对与局部证据监督，不作为通用主测试。
+- CoCoVideo-26K：待下载；用于高质量语义对齐配对训练与未见生成器留出验证。
+- ViF-Bench：开发诊断集，已参与多轮方案选择，不作为独立最终测试。
+- GenBuster benchmark：冻结方法后的主要外部测试；在训练前必须审计其与 DataB 的哈希重叠。
+
+### 第一阶段唯一变化与控制
+
+阶段 0 先比较公开 native-scale 权重的原生输入与固定 resize 输入，不训练模型。只有看到困难 I2V 子集的可用信号后，阶段 1 才进行等数据、等步数三分支：
+
+| 分支 | 唯一差异 |
+|---|---|
+| 单视频分类对照 | 只有 Real/Fake 分类损失 |
+| 正确同源配对 | 在相同分类损失上增加真实 pair rank |
+| 打乱配对控制 | 使用同 generator 内打乱的错误 source partner 和相同 pair rank |
+
+推理时三个分支都只输入单个视频，不提供配对参考、camera 文本或外部标签。
+
+### 阶段 0 验收标准
+
+- 先完成真实帧数、source/generator、分辨率/codec 和哈希泄漏审计；不得假定所有样本固定 16 帧。
+- 困难 I2V 子集 AUROC 至少 0.70，或 Fake recall 相对历史 Qwen 提高至少 10 点，并观察到 native 输入相对固定 resize 的稳定优势，判为强通过。
+- 若两个公开 native 权重均 AUROC 不高于 0.55 且 native/resized 无差异，停止该 backbone，不启动全量配对训练。
+
+### 阶段 1 验收标准
+
+- 正确配对分别超过单视频和打乱配对至少 1.0 个 ViF 跨生成器 Macro Balanced ACC 点。
+- 六类 I2V/编辑生成器 Fake recall 至少提高 3 点，Real recall 下降不超过 1 点。
+- 两个比较的 source-group bootstrap 95% CI 下界均大于 0，并在 CoCoVideo 未见生成器留出集方向一致。
+
+### 已知限制、存储与下一步
+
+- ViF-Bench 只能做开发选择；只有冻结后的 GenBuster/未见生成器结果能支持泛化主张。
+- DataA 主要来自 VACE，局部 mask 监督存在生成器偏置，必须与 CoCoVideo 配对和 DataB replay 分开消融。
+- 阶段 0 的 JSON/CSV/manifest 是小型正式元数据，写 NAS；公开权重和后续 checkpoint 是大型复用资产，放 `/tmp` 并在确认复用后上传 OSS。
+- 立即下一步：实现统一 manifest、source-level split、DataB/GenBuster 泄漏审计，以及 448p/720p native-vs-resize 能力门；在这些结果出来前不启动新的五轮 SFT、CoT 重标或 RL。
 
 ## 记录维护说明
 
