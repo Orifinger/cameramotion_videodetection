@@ -26,6 +26,7 @@
 | 2026-07-20 | 连续相机条件下的时序正常性专家验证（CTNE Gate 1） | 未通过；ViF-Bench 正式门失败 | 在不训练 Qwen、不输入 camera 文本的条件下，匹配的连续相机几何是否使真实视频时序正常性模型稳定优于同容量无条件与打乱条件 | matched 相对 unconditional 的 AUROC 为 -0.009 点，95% CI 跨 0；相机条件未带来增量，且跨域正常性分数接近反向随机，不再将该 CTNE 配方作为 camera 主线 |
 | 2026-07-20 | 最终真假监督下的连续相机交互判别门 | 未通过；正确相机与打乱相机不可区分 | 直接以 DataB Real/Fake 监督训练相机-证据交互分类器，检验连续相机几何能否带来外部检测增量 | matched 相对 evidence-only 仅增 0.37 AUROC 点且置信区间跨 0；相对 shuffled 也不显著，不支持 camera 主贡献 |
 | 2026-07-20 | DataB 自动解释的时序监督内容审计 | 已完成；确认时序监督稀少且真假不对称 | 统计 6766 条 DataB SFT 回答中真正的时序伪影类别、显式跨帧语言和时间标签覆盖范围 | 仅 4.11% Fake 样本含保守时序伪影类别；Real/Fake 显式跨帧语言分别为 80.85%/28.55%，当前数据主要监督空间伪影和 Real 稳定性验证 |
+| 2026-07-20 | Qwen 与时序专家的 ViF-Bench 残余错误互补性审计 | 代码已就绪，待服务器执行 | 同一样本上检查时序专家能否纠正 Qwen 的残余错误，并在原视频分组交叉拟合中稳定提高最终 Real/Fake 指标 | 只把超过打乱专家分数负对照且 bootstrap 置信区间为正的提升视为可融合信号；否则停止当前时序专家融合配方 |
 
 ## 1. 完整 DataB 检测模型的 VIF-Bench 基线
 
@@ -1518,6 +1519,67 @@ matched 相对 evidence-only 的 AUROC 提高 `0.37` 点、跨生成器 Macro Ba
 
 本结果不证明 Qwen3-VL 没有时序能力，也不证明独立时序专家无效。下一步若继续时序方向，必须先做输入协议审计和外部数据上的时序敏感性干预；同时将独立专家分数与 Qwen 逐样本错误对齐，验证 matched evidence 是否能纠正残余错误并优于 shuffled evidence。未通过该残余互补性门前，不启动时序联合 SFT、PPRL 或完整模型融合。
 
+
+## 21. Qwen 与时序专家的 ViF-Bench 残余错误互补性审计
+
+### 这个实验测什么
+
+在完全相同的 ViF-Bench 视频上，把完整 DataB 检测模型的逐样本 Real/Fake 判定与“最终真假监督下的连续相机交互判别门”产生的时序专家分数一一对齐，先回答时序专家是否能纠正 Qwen 已犯的错误，再检验这种互补性是否足以形成可学习的最终二分类增量。本实验不重新训练 Qwen，也不把 camera 文本放进提示词。
+
+### 日期、状态与模型谱系
+
+- 日期：2026-07-20。
+- 状态：代码已就绪，待服务器执行。
+- Qwen 分支：Qwen3-VL-8B-Instruct 经完整 DataB detection SFT 得到的 checkpoint-2115，使用严格匹配 DataB 训练协议的 ViF-Bench 预测；预测文件准确路径由执行时的 QWEN_PREDICTIONS 记录，当前为待补充。
+- 时序专家：第 19 节三 seed 监督判别模型中的 evidence-only 分支，使用 evidence_only_score 与在 DataB validation 固定的 evidence_only_prediction。它不输入 camera 特征，因此本门只审计“独立时序证据是否补充 Qwen”，不再把收益归因于 camera。
+- 工具：tools/audit_vifbench_residual_complementarity.py。
+- 一键脚本：scripts/vifbench_residual_complementarity/run.sh。
+
+### 数据、路径与存储
+
+- Qwen 预测：接受合并后的 base.json 或 rank 结果目录。默认依次检查 NAS 与 /tmp/1res/camera_detection_retention/vifbench_detection_checkpoint_start/ 下的严格提示词结果；若容器已回收，必须通过 QWEN_PREDICTIONS 指向恢复后的文件，不能换成其他续训模型的结果。
+- 时序专家逐样本结果：/input/workflow_58770161/workspace/test/cameramotion_det/res/camera_discriminative_gate/v1/eval/vifbench/camera_discriminative_gate_items.csv。
+- 正式小结果：/input/workflow_58770161/workspace/test/cameramotion_det/res/vifbench_residual_complementarity/v1/，包含 summary JSON、逐样本 CSV、中文 Markdown 报告和运行日志。
+- 本实验只读已有的小结果并在 CPU 上运行，不生成大特征、模型或 checkpoint，不需要 OSS。
+
+### 配对、唯一变化与控制
+
+Qwen 使用 video_id=生成器/基础视频名，专家 CSV 使用带完整帧目录的 sample_id。工具只在去掉明确的 parsed_frames/parsed_frames/{Real|Fake}/ 前缀后建立一对一配对，并审计缺失、重复、无效回答和真假标签冲突。Real 与其同源的多个 Fake 变体共享 base_id，任何交叉拟合都以该 base_id 分组，禁止同一原视频身份跨训练折和测试折。
+
+| 条件 | 输入 | 作用 |
+|---|---|---|
+| Qwen 原判定 | Qwen 的硬 Real/Fake 输出 | 最终任务基线 |
+| 时序专家 | evidence_only_score/prediction | 检查独立专家本身与错误分布 |
+| Qwen + 匹配专家分数 | Qwen 硬判定与当前视频连续专家分数 | 五折分组 out-of-fold 融合诊断 |
+| Qwen + 打乱专家分数 | 全局随机置换专家分数后重复相同交叉拟合 100 次 | 检查增益是否依赖逐样本证据对齐，而不是增加一个可拟合数值 |
+| Oracle | 只要 Qwen 或专家任一正确就算正确 | 只给出理论上限，不是可实现方法 |
+
+逐样本错误分为“两者都对”“仅专家正确”“仅 Qwen 正确”“两者都错”，并报告专家在 Qwen 错误中的 rescue 比例、在 Qwen 正确样本中的潜在 harm 池、生成器分层和 motion bucket 分层。
+
+### 训练与评测设置
+
+- 融合器只是两维逻辑回归，输入为 Qwen 硬判定和连续专家分数；不更新 Qwen 或专家。
+- 五折 StratifiedGroupKFold 按 base_id 隔离，同一原视频及其 Real/Fake 变体不跨折。
+- 训练样本权重使 Real 总权重、Fake 总权重各为一半，并让不同 Fake generator 在 Fake 权重中等权，主指标对应 ViF-Bench 跨生成器宏平均。
+- 阈值固定为逻辑回归概率 0.5；不在测试折搜索阈值。
+- 用原视频身份分组 bootstrap 2000 次计算融合相对 Qwen 的跨生成器 Macro Balanced ACC 差异置信区间。
+- 随机打乱专家分数 100 次，每次重新完成同样的分组 OOF 流程，使用其 95 分位作为样本对齐负对照。
+- 因 Qwen 现有结果只有硬 Real/Fake 而无校准 logits，本门只判断“是否值得做路由”，不能代表最佳可实现融合上限。
+
+### 验收标准
+
+- Qwen 与专家样本交集覆盖两边都至少 99%，Qwen 格式有效，且无标签冲突。
+- 专家至少能纠正 10% 的 Qwen 错误；这只是一项必要条件，不能单独判定通过。
+- 分组 OOF 融合相对 Qwen 的跨生成器 Macro Balanced ACC 至少提高 0.5 点。
+- 上述提升的原视频分组 bootstrap 95% CI 下界必须大于 0。
+- 匹配专家融合必须高于 100 次打乱专家分数融合的 95 分位。
+- 全部条件同时满足才标记为 passed_for_model_fusion；科学门未通过时脚本仍以成功状态保存结果，避免把“方法无效”误报成运行错误。
+
+### 泄漏、结论边界与立即下一步
+
+ViF-Bench 已被项目反复查看，而且其标签参与五折融合器拟合，所以 OOF 结果只是开发诊断，不是论文中的正式外部提升。它通过只证明专家错误与 Qwen 错误存在样本对齐、可学习的互补性；下一步必须在 DataB 留出集训练冻结路由器，并只在未用于选择方案的 GenBuster benchmark 上验收。它不支持重新宣称 camera 有效，因为第 19 节已经证明正确 camera 与打乱 camera 不可区分，本门默认使用 camera-independent 的 evidence-only 专家。
+
+若本门未通过，不启动联合 SFT、RL 或大型 Qwen 推理；先从逐样本 CSV 判断是专家本身过弱、rescue 与 harm 不平衡，还是互补只集中在少数生成器。当前专家配方随后停止，重新选择切入点。
 ## 记录维护说明
 
 - 新实验开始时先在本文件新增中文实验定义和验收标准。
