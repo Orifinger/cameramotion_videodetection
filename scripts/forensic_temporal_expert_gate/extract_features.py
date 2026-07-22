@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import sys
 import time
@@ -26,6 +25,7 @@ from scripts.forensic_temporal_expert_gate.contracts import (
     feature_filename,
     normalize_path,
     read_json_or_jsonl,
+    resized_shape,
     write_json,
     write_jsonl,
 )
@@ -43,24 +43,6 @@ def resolve_model_root(path: Path) -> Path:
     if len(candidates) != 1:
         raise FileNotFoundError(f"expected one local Hugging Face model under {path}")
     return candidates[0]
-
-
-def resized_shape(
-    width: int,
-    height: int,
-    *,
-    patch_size: int,
-    max_pixels: int,
-    max_side: int,
-) -> tuple[int, int]:
-    scale = 1.0
-    if max_pixels > 0 and width * height > max_pixels:
-        scale = min(scale, math.sqrt(max_pixels / float(width * height)))
-    if max_side > 0 and max(width, height) * scale > max_side:
-        scale = min(scale, max_side / float(max(width, height)))
-    output_width = max(patch_size, int(width * scale) // patch_size * patch_size)
-    output_height = max(patch_size, int(height * scale) // patch_size * patch_size)
-    return output_width, output_height
 
 
 def load_frame(

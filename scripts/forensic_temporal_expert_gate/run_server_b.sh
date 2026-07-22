@@ -66,6 +66,8 @@ build() {
 }
 
 smoke() {
+  CUDA_VISIBLE_DEVICES=0 python -m scripts.forensic_temporal_expert_gate.smoke_model \
+    --output-json "${META_ROOT}/preflight/server_b_model_smoke.json"
   CUDA_VISIBLE_DEVICES=0 python -m scripts.forensic_temporal_expert_gate.extract_features \
     --manifest-jsonl "${MANIFEST}" \
     --output-dir "${WORK_ROOT}/smoke" \
@@ -111,7 +113,9 @@ evaluate_gate1() {
   CUDA_VISIBLE_DEVICES=0 python -m scripts.forensic_temporal_expert_gate.evaluate \
     --feature-index-jsonl "${FEATURE_INDEX}" \
     --model-root "${MODEL_BUNDLE}" \
-    --output-dir "${EVAL_DIR}"
+    --output-dir "${EVAL_DIR}" \
+    --expected-records 3160 \
+    --min-coverage 0.99
   local status=$?
   set -e
   echo "Gate 1 diagnostic exit status: ${status}; Gate 2 will still be computed for diagnosis."

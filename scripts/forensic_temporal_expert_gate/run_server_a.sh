@@ -57,6 +57,8 @@ build() {
 }
 
 smoke() {
+  CUDA_VISIBLE_DEVICES=0 python -m scripts.forensic_temporal_expert_gate.smoke_model \
+    --output-json "${META_ROOT}/preflight/server_a_model_smoke.json"
   CUDA_VISIBLE_DEVICES=0 python -m scripts.forensic_temporal_expert_gate.extract_features \
     --manifest-jsonl "${MANIFEST}" \
     --output-dir "${WORK_ROOT}/smoke" \
@@ -97,6 +99,7 @@ train_all() {
       --output-dir "${TRAIN_ROOT}" \
       --job-index "${job}" \
       --job-count "${job_count}" \
+      --patience 0 \
       > "${WORK_ROOT}/train_logs/job_${job}.log" 2>&1 &
     pids+=("$!")
   done

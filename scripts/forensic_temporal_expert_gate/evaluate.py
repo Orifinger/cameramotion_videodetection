@@ -130,6 +130,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--shuffle-seed", type=int, default=20260722)
     parser.add_argument("--bootstrap-iterations", type=int, default=2000)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--expected-records", type=int, default=3160)
+    parser.add_argument("--min-coverage", type=float, default=0.99)
     parser.add_argument("--min-primary-gain", type=float, default=0.015)
     parser.add_argument("--max-other-primary-drop", type=float, default=0.01)
     parser.add_argument("--min-order-sensitivity", type=float, default=0.01)
@@ -140,6 +142,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     rows = read_json_or_jsonl(args.feature_index_jsonl)
+    coverage = len(rows) / args.expected_records if args.expected_records > 0 else 0.0
     labels = np.asarray([int(row["label"]) for row in rows], dtype=np.int64)
     generators = [str(row.get("generator_name", "unknown")) for row in rows]
     models = discover_models(args.model_root)
@@ -177,24 +180,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     ordered_static = deltas("ordered", "static")
     ordered_shuffled = deltas("ordered", "shuffled_trained")
     order_sensitivity = deltas("ordered", "ordered_shuffled_input")
-    seed_wins = 0
+    seed_wins_static = 0
+    seed_wins_shuffled = 0
     for seed in models:
-        seed_delta = max(
+        seed_wins_static += int(max(
             float(by_seed["ordered"][seed][key] - by_seed["static"][seed][key])
             for key in primary
-        )
-        seed_wins += int(seed_delta > 0)
+        ) > 0)
+        seed_wins_shuffled += int(max(
+            float(by_seed["ordered"][seed][key] - by_seed["shuffled_trained"][seed][key])
+            for key in primary
+        ) > 0)
 
     def primary_pass(delta: Mapping[str, float]) -> bool:
         values = [float(delta[key]) for key in primary]
         return max(values) >= args.min_primary_gain and min(values) >= -args.max_other_primary_drop
 
     checks = {
-        "three_complete_seeds": len(models) >= 3,
+        "held_out_feature_coverage": coverage >= args.min_coverage,
+        "exactly_three_complete_seeds": len(models) == 3,
         "ordered_beats_static": primary_pass(ordered_static),
         "ordered_beats_equal_capacity_shuffled_training": primary_pass(ordered_shuffled),
         "ordered_model_uses_frame_order": max(order_sensitivity.values()) >= args.min_order_sensitivity,
-        "seed_direction_consistency": seed_wins >= 2,
+        "seed_direction_consistency_vs_static": seed_wins_static >= 2,
+        "seed_direction_consistency_vs_shuffled_training": seed_wins_shuffled >= 2,
         "real_recall_preserved": float(reports["ordered"]["real_recall"] - reports["static"]["real_recall"]) >= -args.max_real_recall_drop,
     }
     status = "passed" if all(checks.values()) else "failed"
@@ -229,6 +238,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "development_dataset": "ViF-Bench; no threshold or fusion weight is fitted on its labels",
         "genbuster_closed_benchmark_touched": False,
+        "expected_records": args.expected_records,
+        "valid_feature_records": len(rows),
+        "coverage": coverage,
         "models": {str(seed): {mode: normalize_path(path) for mode, path in paths.items()} for seed, paths in models.items()},
         "thresholds": {
             "min_primary_gain": args.min_primary_gain,

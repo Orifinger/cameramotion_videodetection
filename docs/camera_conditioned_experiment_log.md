@@ -6,6 +6,7 @@
 
 | 日期 | 中文实验名称 | 状态 | 这个实验测什么 | 当前结论 |
 |---|---|---|---|---|
+| 2026-07-22 | 原生尺度 DINO 时序取证专家与强 Qwen 互补性两层验证 | 已决定执行，代码待服务器验证 | 先验证正确帧序是否产生可泛化的 Real/Fake 取证增益，再验证该专家能否以预注册固定融合改善强 Qwen | 待补充；ViF 只作开发门，GenBuster Closed Benchmark 保持未触碰 |
 | 2026-07-08 | 完整 DataB 检测模型的 VIF-Bench 基线 | 已完成 | 仅使用自动标注检测数据训练后，在通用全生成视频测试集上的检测能力 | 旧记录为 ACC 83.96、F1 84.72；需用当前完全一致的提示词复测一次 |
 | 2026-07-08 | DataA 与 DataB 混合检测续训 | 未通过 | 加入局部编辑 DataA 检测数据后，能否同时提高 DataA 并保持 VIF-Bench | DataA 没有形成可靠提升，VIF-Bench 明显下降 |
 | 2026-07-08 | DataA 与 DataB 相机条件化混合续训 | 未通过 | 在检测训练中加入相机条件后，是否优于普通混合续训 | 只有局部波动，没有稳定优于普通续训，VIF-Bench 仍明显下降 |
@@ -1778,6 +1779,53 @@ CoT 同样呈现类别模板化：38 个 Real→Fake 全部输出伪影标签，
 - DataA 主要来自 VACE，局部 mask 监督存在生成器偏置，必须与 CoCoVideo 配对和 DataB replay 分开消融。
 - 阶段 0 的 JSON/CSV/manifest 是小型正式元数据，写 NAS；公开权重和后续 checkpoint 是大型复用资产，放 `/tmp` 并在确认复用后上传 OSS。
 - 立即下一步：实现统一 manifest、source-level split、DataB/GenBuster 泄漏审计，以及 448p/720p native-vs-resize 能力门；在这些结果出来前不启动新的五轮 SFT、CoT 重标或 RL。
+
+## 2026-07-22：原生尺度 DINO 时序取证专家与强 Qwen 互补性两层验证
+
+**状态：已决定执行，代码待服务器预检与正式运行。**
+
+**一句话说明：**本轮不再继续证明“camera 有用”，而是先检验正确视频帧序本身是否提供静态视觉无法解释的生成取证信号，再检验该信号能否补足强 Qwen 的剩余错误。
+
+### 具体问题与模型沿袭
+
+- 起点视觉模型：冻结的 DINOv2-S/14，服务器路径 `/home/admin/dinov2-small`；不使用 camera labels、camera caption、RAFT、光流、单应矩阵或相机补偿。
+- 检测专家：在 DINO 每帧 CLS token 与 `4x4` pooled patch tokens 上训练轻量 Real/Fake 分类器。
+- 强模型参照：历史 DataB detection checkpoint 在 ViF-Bench 上的原始硬预测；Qwen 置信度若可用，只做预注册固定融合，不重新生成或替换历史硬答案。
+
+### 数据、划分与路径
+
+- DataB 训练池：完整 `v4vif_2766busterall_trainall.json` 共 6766 条，路径 `/input/workflow_58770161/workspace/test/camb/camerabenchdataB-main/detection/v4vif_2766busterall_trainall.json`。保留原始 11/16/17 帧，不默认每条 16 帧。
+- DataB 划分：按来源 group 确定性分为 5 folds；fold 0 只用于 checkpoint/阈值选择，fold 1-4 用于训练，同一 group 不跨 fold。
+- ViF-Bench：3160 条，只作开发验收；不得用标签搜索阈值、融合权重或方法分支。
+- GenBuster Closed Benchmark：保持未读取、未调参、未筛选；只有两层门均通过后才执行一次最终测试。
+
+### 单一变化与控制条件
+
+- 静态集合专家：对帧 token 做顺序不敏感聚合。
+- 正确顺序专家：使用同容量时序网络、相邻帧差分与真实帧序。
+- 打乱监督专家：模型、参数量、数据、优化器和训练步数均与正确顺序专家相同，只在每个 epoch 确定性打乱帧序。
+- 输入打乱控制：给正确顺序专家喂入打乱帧序，直接检验其预测是否依赖顺序。
+
+### 重要设置
+
+- DINO 权重冻结；图像只做保持长宽比的下采样并对齐 14 像素 patch，不裁剪、不补边、不上采样。
+- 训练种子为 `13/37/73`；三个专家分支保持等结构、等样本、等步数。
+- checkpoint 与分类阈值只由 DataB fold 0 确定。
+- 与 Qwen 的融合公式预注册为 `logit(qwen) + 0.25 * logit(expert)`；静态与打乱控制使用完全相同公式。
+
+### 验收标准
+
+**第一层，时序因果能力门：**正确顺序专家相对静态集合专家和打乱监督专家，在 ViF AUROC 与跨生成器 Macro Balanced ACC 中至少一项提高 1.5 点，另一项下降不超过 1 点；输入打乱后至少一项下降 1 点；3 个种子中至少 2 个方向一致；Real Recall 相对静态专家下降不超过 3 点；有效样本覆盖率至少 99%。
+
+**第二层，Qwen 互补性门：**第一层先通过；固定融合相对历史强 Qwen 至少一项主指标提高 1.5 点，source-group bootstrap 95% 置信区间下界大于 0；正确顺序融合相对各顺序控制至少提高 1 点；Real Recall 下降不超过 1 点；Qwen 置信度与历史预测匹配覆盖率至少 99%。
+
+### 已知边界、存储与下一步
+
+- 该实验只能判断“帧序取证信号是否存在并与 Qwen 互补”，不能在 ViF 上建立最终泛化结论。
+- DataB 训练池可能包含 GenBuster 原始 train/test 来源，但本轮最终报告对象是独立的 GenBuster Closed Benchmark；原始来源字段只作泄漏审计，不据此删减 6766 条训练数据。
+- DINO NPZ 特征与模型先放 `/tmp/1res/forensic_temporal_expert_gate/v1`。两台服务器 `/tmp` 不互通；服务器 A 只把紧凑模型 bundle 写入 NAS，服务器 B 从 NAS 读取。ViF 特征在服务器 B 本地重算。
+- 目前属于验证实验，大型特征不上传 OSS；只有 Gate 通过且产物确定复用时再给单条 `ossutil64 cp -r` 指令。
+- 立即下一步：两台服务器分别执行 `preflight`、`build`、`smoke`；通过后服务器 A 完成 DataB 提取与三分支训练，服务器 B 并行完成 ViF 提取并等待 NAS 模型 bundle，再执行两层验收。
 
 ## 记录维护说明
 

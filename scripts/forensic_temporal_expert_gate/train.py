@@ -205,7 +205,7 @@ def train_one(
             )
         else:
             stale += 1
-        if stale >= patience:
+        if patience > 0 and stale >= patience:
             break
     summary = {
         "status": "completed",
@@ -215,6 +215,7 @@ def train_one(
         "best_epoch": best_epoch,
         "best_validation_roc_auc": best_auc,
         "epochs_ran": len(history),
+        "fixed_epoch_budget": patience <= 0,
         "elapsed_sec": time.time() - started,
         "history": history,
     }
@@ -236,7 +237,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.15)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--patience", type=int, default=6)
+    parser.add_argument("--patience", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--gradient-clip", type=float, default=5.0)

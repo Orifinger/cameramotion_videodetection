@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections import Counter
 from pathlib import Path, PurePosixPath
@@ -38,6 +39,25 @@ def stable_hash(value: str, seed: int = 0) -> str:
 
 def feature_filename(sample_id: str) -> str:
     return hashlib.sha256(sample_id.encode("utf-8")).hexdigest()[:24] + ".npz"
+
+
+def resized_shape(
+    width: int,
+    height: int,
+    *,
+    patch_size: int,
+    max_pixels: int,
+    max_side: int,
+) -> tuple[int, int]:
+    """Aspect-preserving downscale aligned to the DINO patch size, without crop."""
+    scale = 1.0
+    if max_pixels > 0 and width * height > max_pixels:
+        scale = min(scale, math.sqrt(max_pixels / float(width * height)))
+    if max_side > 0 and max(width, height) * scale > max_side:
+        scale = min(scale, max_side / float(max(width, height)))
+    output_width = max(patch_size, int(width * scale) // patch_size * patch_size)
+    output_height = max(patch_size, int(height * scale) // patch_size * patch_size)
+    return output_width, output_height
 
 
 def read_json_or_jsonl(path: Path) -> list[dict[str, Any]]:
