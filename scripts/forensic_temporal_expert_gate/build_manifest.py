@@ -56,8 +56,7 @@ def assign_group_folds(rows: list[dict[str, Any]], folds: int, seed: int) -> Non
                 row["fold"] = fold
 
 
-def _deduplicate(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    output: list[dict[str, Any]] = []
+def _audit_duplicate_frames(rows: list[dict[str, Any]]) -> int:
     seen: dict[tuple[str, ...], dict[str, Any]] = {}
     duplicates = 0
     for row in rows:
@@ -65,13 +64,12 @@ def _deduplicate(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]
         previous = seen.get(key)
         if previous is None:
             seen[key] = row
-            output.append(row)
             continue
         if previous["label"] != row["label"]:
             raise ValueError(f"duplicate frames have conflicting labels: {row['sample_id']}")
-        previous.setdefault("source_row_indices", []).extend(row["source_row_indices"])
+        row["duplicate_of_sample_id"] = previous["sample_id"]
         duplicates += 1
-    return output, duplicates
+    return duplicates
 
 
 def _finish(
@@ -144,7 +142,7 @@ def build_datab(args: argparse.Namespace) -> int:
         raw_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "sample_id": f"datab:{frame_dir}",
+                "sample_id": f"datab:{frame_dir}#row={index:05d}",
                 "video_id": video_id_from_frame_dir(frame_dir),
                 "dataset_name": "DataB",
                 "source_dataset": source_dataset,
@@ -159,11 +157,8 @@ def build_datab(args: argparse.Namespace) -> int:
                 "source_row_indices": [index],
             }
         )
-    rows, duplicates = _deduplicate(raw_rows)
-    if duplicates:
-        raise ValueError(
-            f"DataB contains {duplicates} duplicate rows; refusing to silently reduce 6766"
-        )
+    rows = raw_rows
+    duplicates = _audit_duplicate_frames(rows)
     assign_group_folds(rows, args.folds, args.seed)
     summary = _finish(
         rows,
@@ -173,6 +168,8 @@ def build_datab(args: argparse.Namespace) -> int:
             "kind": "full_datab_detection_json",
             "detection_json": normalize_path(args.detection_json),
             "raw_records": len(payload),
+            "duplicate_frame_records": duplicates,
+            "duplicate_frame_records_retained": True,
             "folds": args.folds,
             "fold_seed": args.seed,
             "important": (

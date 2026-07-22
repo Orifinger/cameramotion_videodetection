@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from scripts.forensic_temporal_expert_gate.build_manifest import assign_group_folds
+from scripts.forensic_temporal_expert_gate.build_manifest import (
+    _audit_duplicate_frames,
+    assign_group_folds,
+)
 from scripts.forensic_temporal_expert_gate.complementarity import canonical_video_id
 from scripts.forensic_temporal_expert_gate.contracts import resized_shape, stable_hash
 from scripts.forensic_temporal_expert_gate.metrics import (
@@ -66,3 +69,19 @@ def test_vif_id_alignment_contract() -> None:
     assert canonical_video_id(
         "/tmp/x/parsed_frames/parsed_frames/Real/real/b.mp4"
     ) == "real/b.mp4"
+def test_duplicate_frame_records_are_retained_and_linked() -> None:
+    rows = [
+        {
+            "sample_id": "row-0",
+            "frame_paths": ["/x/001.png", "/x/002.png"],
+            "label": 1,
+        },
+        {
+            "sample_id": "row-1",
+            "frame_paths": ["/x/001.png", "/x/002.png"],
+            "label": 1,
+        },
+    ]
+    assert _audit_duplicate_frames(rows) == 1
+    assert len(rows) == 2
+    assert rows[1]["duplicate_of_sample_id"] == "row-0"
