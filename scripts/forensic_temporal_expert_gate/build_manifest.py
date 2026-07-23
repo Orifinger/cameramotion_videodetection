@@ -7,7 +7,7 @@ import argparse
 import json
 import sys
 from collections import Counter, defaultdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 if __package__ is None or __package__ == "":
@@ -72,6 +72,21 @@ def _audit_duplicate_frames(rows: list[dict[str, Any]]) -> int:
     return duplicates
 
 
+def resolve_vif_frame_directory(frame_dir: str, frame_root: Path | None) -> Path:
+    """Resolve a stale ViF index path under the current container frame root."""
+    indexed = Path(frame_dir)
+    if indexed.is_dir() or frame_root is None:
+        return indexed
+    parts = list(PurePosixPath(normalize_path(frame_dir)).parts)
+    for index, part in enumerate(parts):
+        if part.casefold() not in {"real", "fake"}:
+            continue
+        candidate = frame_root.joinpath(*parts[index:])
+        if candidate.is_dir():
+            return candidate
+    return indexed
+
+
 def _finish(
     rows: list[dict[str, Any]],
     *,
@@ -81,6 +96,11 @@ def _finish(
     expected_records: int,
     check_files: bool,
 ) -> dict[str, Any]:
+    short_sequences = [
+        {"sample_id": row["sample_id"], "frame_count": int(row["frame_count"])}
+        for row in rows
+        if int(row["frame_count"]) < 2
+    ]
     missing: list[dict[str, Any]] = []
     if check_files:
         for row in rows:
@@ -101,7 +121,12 @@ def _finish(
         "schema_version": SCHEMA_VERSION,
         "status": (
             "passed"
-            if len(rows) == expected_records and not missing and not split_groups
+            if (
+                len(rows) == expected_records
+                and not missing
+                and not short_sequences
+                and not split_groups
+            )
             else "failed"
         ),
         "manifest_jsonl": normalize_path(output_jsonl),
@@ -119,6 +144,8 @@ def _finish(
         "groups_crossing_folds": len(split_groups),
         "missing_image_references": sum(item["count"] for item in missing),
         "first_missing": missing[:20],
+        "records_with_fewer_than_two_frames": len(short_sequences),
+        "first_short_sequences": short_sequences[:20],
     }
     write_json(summary_json, summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -187,8 +214,9 @@ def build_vif(args: argparse.Namespace) -> int:
     expected = read_vif_index(args.index_dir, args.expected_ranks)
     rows: list[dict[str, Any]] = []
     for item in expected:
-        frame_dir = normalize_path(item["frame_dir_path"])
-        directory = Path(frame_dir)
+        indexed_frame_dir = normalize_path(item["frame_dir_path"])
+        directory = resolve_vif_frame_directory(indexed_frame_dir, args.frame_root)
+        frame_dir = normalize_path(directory)
         frames = frame_paths_in_directory(directory) if directory.is_dir() else []
         label_name = label_from_path(frame_dir)
         generator = str(item["generator_name"]) if label_name == "Fake" else "real"
@@ -207,6 +235,7 @@ def build_vif(args: argparse.Namespace) -> int:
                 "frame_dir_path": frame_dir,
                 "frame_paths": frames,
                 "frame_count": len(frames),
+                "indexed_frame_dir_path": indexed_frame_dir,
             }
         )
     summary = _finish(
@@ -218,6 +247,7 @@ def build_vif(args: argparse.Namespace) -> int:
             "index_dir": normalize_path(args.index_dir),
             "development_only": True,
             "genbuster_closed_benchmark_touched": False,
+            "frame_root": normalize_path(args.frame_root) if args.frame_root else None,
         },
         expected_records=args.expected_records,
         check_files=args.check_files,
@@ -243,6 +273,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     vif.add_argument("--index-dir", type=Path, required=True)
     vif.add_argument("--output-jsonl", type=Path, required=True)
     vif.add_argument("--summary-json", type=Path, required=True)
+    vif.add_argument("--frame-root", type=Path)
     vif.add_argument("--expected-ranks", type=int, default=16)
     vif.add_argument("--expected-records", type=int, default=3160)
     vif.add_argument("--check-files", action="store_true")

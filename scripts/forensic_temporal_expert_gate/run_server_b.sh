@@ -12,6 +12,25 @@ INDEX_DIR="${INDEX_DIR:-${V4TRAIN_EVAL_DIR}/test_index_splits/splits_16}"
 if [[ ! -d "${INDEX_DIR}" && -d "$(dirname "${V4TRAIN_EVAL_DIR}")/test_index_splits/splits_16" ]]; then
   INDEX_DIR="$(dirname "${V4TRAIN_EVAL_DIR}")/test_index_splits/splits_16"
 fi
+VIF_FRAME_ROOT="${VIF_FRAME_ROOT:-}"
+if [[ -z "${VIF_FRAME_ROOT}" ]]; then
+  for candidate in \
+    /tmp/1vif-bench/parsed_frames/parsed_frames \
+    /tmp/source_videosvifbench/parsed_frames/parsed_frames \
+    /tmp/source_videosvifbench/parsed_frames \
+    /tmp/source_videosvifbench
+  do
+    if [[ -d "${candidate}/Real" && -d "${candidate}/Fake" ]]; then
+      VIF_FRAME_ROOT="${candidate}"
+      break
+    fi
+  done
+fi
+if [[ -z "${VIF_FRAME_ROOT}" ]]; then
+  echo "Unable to locate a ViF frame root containing Real/ and Fake/. Set VIF_FRAME_ROOT." >&2
+  exit 2
+fi
+
 HISTORICAL_QWEN="${HISTORICAL_QWEN:-/input/workflow_58770161/workspace/test/test_selfcot/Skyra/res/v4vif_2766busterall_trainall/v4vif_2766busterall_trainall-3vl8b-vifbench/Qwen3-VL-v4vif_2766busterall_trainall-vifbench.json}"
 QWEN_CONFIDENCE="${QWEN_CONFIDENCE:-${PROJECT_ROOT}/res/vifbench_qwen_confidence_fusion/v1/confidence_shards}"
 
@@ -50,6 +69,7 @@ preflight() {
   python -m scripts.forensic_temporal_expert_gate.preflight \
     --dinov2-model "${DINOV2_MODEL}" \
     --required-dir "${INDEX_DIR}" \
+    --required-dir "${VIF_FRAME_ROOT}" \
     --required-file "${HISTORICAL_QWEN}" \
     --expected-gpus "${NUM_GPUS}" \
     --output-json "${META_ROOT}/preflight/server_b.json"
@@ -58,6 +78,7 @@ preflight() {
 build() {
   python -m scripts.forensic_temporal_expert_gate.build_manifest vif \
     --index-dir "${INDEX_DIR}" \
+    --frame-root "${VIF_FRAME_ROOT}" \
     --output-jsonl "${MANIFEST}" \
     --summary-json "${MANIFEST_SUMMARY}" \
     --expected-ranks 16 \
@@ -138,6 +159,7 @@ echo "=== 服务器 B：ViF-Bench 时序因果与 Qwen 互补性开发门 ==="
 echo "stage=${STAGE}"
 echo "work_root=${WORK_ROOT}"
 echo "persistent_root=${META_ROOT}"
+echo "vif_frame_root=${VIF_FRAME_ROOT}"
 echo "GenBuster Closed Benchmark is not read by this script."
 
 case "${STAGE}" in
